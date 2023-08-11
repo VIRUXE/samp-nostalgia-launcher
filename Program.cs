@@ -19,7 +19,6 @@ namespace NostalgiaAnticheat {
         private static readonly Player Player = new();
         private static readonly LogWatcher LogWatcher = new();
 
-
         public static string SendMessage(string ptMessage, string enMessage = null, ConsoleColor color = ConsoleColor.Gray, bool newLine = true, bool isAction = false) {
             string message = enMessage != null ? SystemLanguage == Language.PT ? ptMessage : enMessage : ptMessage;
 
@@ -63,7 +62,7 @@ namespace NostalgiaAnticheat {
             return password;
         }
 
-        public static async void ShowMenu() {
+        public static async Task ShowMenu() {
             Dictionary<char, Func<Task>> options = new();
 
             List<MenuOption> menuOptions = new() {
@@ -105,29 +104,29 @@ namespace NostalgiaAnticheat {
                                 "Now, enter your password (entries will be hidden for security reasons):",
                                 ConsoleColor.Cyan);
                     },
-                    () => !Player.LoggedIn() && Game.ComparePath(SAMP.GetGamePath()) == 1 && Gameserver.IsOnline && Game.Valid
+                    () => !Player.LoggedIn && Game.ComparePath(SAMP.GetGamePath()) == 1 && Gameserver.IsOnline && Game.Valid
                 ),
                 new MenuOption(
                     ("Deslogar", "Logout"),
                     async () => {
                         if (await Player.Logout())
-                            SendMessage("Deslogado com Sucesso", "Logged out.", ConsoleColor.Green);
+                            SendMessage("Deslogado com Sucesso", "Logged out.", ConsoleColor.Green, true, true);
                         else
-                            SendMessage("Ocorreu um erro ao deslogar.", "An error ocurred while logging out.", ConsoleColor.Red);
+                            SendMessage("Ocorreu um erro ao deslogar.", "An error ocurred while logging out.", ConsoleColor.Red, true, true);
                     },
-                    () => Player.LoggedIn()
+                    () => Player.LoggedIn
                 ),
                 new MenuOption(
-                    ("Entrar no Servidor", "Enter Server"),
-                    () => {
+                    ("Jogar", "Play"),
+                    async () => {
                         if (Game.Launch())
-                            SendMessage("Jogo Iniciado", "Game Started", ConsoleColor.Green, true, true);
+                            SendMessage("Jogo Iniciado. Esperando conexão... ", "Game Started. Waiting for connection... ", ConsoleColor.White, false, true);
                         else
                             SendMessage("O jogo já se encontra iniciado. Focando na tela.", "The game is already running. Showing window.", ConsoleColor.Yellow, true, true);
 
-                        return Task.CompletedTask;
+                        do await Task.Delay(1000); while (!Game.Connected);
                     },
-                    () => Player.LoggedIn() && !Game.IsRunning && Game.ComparePath(SAMP.GetGamePath()) == 1 && Gameserver.IsOnline && Game.Valid
+                    () => Player.LoggedIn && !Game.IsRunning && Game.ComparePath(SAMP.GetGamePath()) == 1 && Gameserver.IsOnline && Game.Valid
                 ),
                 new MenuOption(
                     ("Verificar Arquivos do Jogo", "Verify Game Files"),
@@ -135,13 +134,15 @@ namespace NostalgiaAnticheat {
                         Game.Verify();
                         return Task.CompletedTask;
                     },
-                    () => Player.LoggedIn() && !Game.IsRunning
+                    () => Player.LoggedIn && !Game.IsRunning
                 ),
                 new MenuOption(
                     ("Focar no Jogo", "Focus on Game"),
                     () => {
-                        if (Game.Focus()) SendMessage("Jogo focado na tela.", "Focused on Game", ConsoleColor.Green, true, true);
-                        else SendMessage("O jogo já se encontra na tela.", "You're already focused on the game.", ConsoleColor.Yellow, true, true);
+                        if (Game.Focus()) 
+                            SendMessage("Jogo focado na tela.", "Focused on Game", ConsoleColor.Green, true, true);
+                        else 
+                            SendMessage("O jogo já se encontra na tela.", "You're already focused on the game.", ConsoleColor.Yellow, true, true);
 
                         return Task.CompletedTask;
                     },
@@ -154,8 +155,10 @@ namespace NostalgiaAnticheat {
 
                         Console.Write("... ");
 
-                        if (await Game.Close()) SendMessage("Fechado.", "Closed.", ConsoleColor.Green);
-                        else SendMessage("Impossivel fechar.", "Unable to Close.", ConsoleColor.Red);
+                        if (await Game.Close()) 
+                            SendMessage("Fechado.", "Closed.", ConsoleColor.Green);
+                        else 
+                            SendMessage("Impossivel fechar.", "Unable to Close.", ConsoleColor.Red);
                     },
                     () => Game.IsRunning
                 )
@@ -182,7 +185,7 @@ namespace NostalgiaAnticheat {
             while (true) {
                 ConsoleKeyInfo key = Console.ReadKey(true);
 
-                Debug.WriteLineIf(!string.IsNullOrEmpty(key.ToString()), $"Key Pressed: {key.KeyChar}");
+                //Debug.WriteLineIf(!string.IsNullOrEmpty(key.ToString()), $"Key Pressed: {key.KeyChar}");
 
                 if (key.KeyChar == 'q' || key.KeyChar == 'Q') {
                     _ = Player.Logout(); // No need to wait since we are exiting
@@ -191,10 +194,10 @@ namespace NostalgiaAnticheat {
                 } else if (options.ContainsKey(key.KeyChar)) {
                     await options[key.KeyChar]();
 
-                    ShowMenu();
+                    await ShowMenu();
                 } else {
                     SendMessage("Opção inválida. Tente novamente.", "Invalid option. Try again.", ConsoleColor.Red);
-                    ShowMenu();
+                    await ShowMenu();
                 }
             }
         }
@@ -202,13 +205,15 @@ namespace NostalgiaAnticheat {
         private static async void LogMonitor_OnConnected(object sender, EventArgs e) {
             do await Task.Delay(1000); while (!Game.IsResponding);
 
-            SendMessage("Conexão ao servidor de jogo estabelecida.", "Connected to the gameserver.", ConsoleColor.Green, true, true);
+            Game.Connected = true;
+
+            SendMessage("Conexão ao servidor de jogo estabelecida.", "Connected to the gameserver.", ConsoleColor.Green, true, false);
 
             //await Task.Delay(10000);
 
             _ = SAMP_API.API.SendChat("/2fa 1a2b3c");
 
-            SAMP_API.API.AddChatMessage("Anti-Cheat ativo.");
+            _ = SAMP_API.API.AddChatMessage("Anti-Cheat ativo.");
 
             /*if (Game.SendKeys("/2fa 1a2b3c"))
                 SendMessage("Autenticação enviada.", "Authentication sent.", ConsoleColor.Green, true, true);
@@ -217,7 +222,7 @@ namespace NostalgiaAnticheat {
                 _ = Game.Close();
             }*/
 
-            ShowMenu();
+            await ShowMenu();
         }
 
         public static async Task Main() {
@@ -230,8 +235,14 @@ namespace NostalgiaAnticheat {
             SendMessage("Launcher do Scavenge Nostalgia", "Scavenge Nostalgia Launcher", ConsoleColor.White, false);
             Console.WriteLine($" - {Assembly.GetExecutingAssembly().GetName().Version}\n");
 
+            if (await Player.IsHwBanned()) {
+                SendMessage("Banido.", "Banned.", ConsoleColor.Red, true, true);
+                Console.ReadKey();
+                Environment.Exit(0);
+            }
+
             // Logout Player on app exit
-            AppDomain.CurrentDomain.ProcessExit += (s, e) => _ = Player.Logout();
+            AppDomain.CurrentDomain.ProcessExit += async (s, e) => await Player.Logout();
 
             LogWatcher.OnConnected += LogMonitor_OnConnected;
 
@@ -243,16 +254,16 @@ namespace NostalgiaAnticheat {
                 Gameserver.StateUpdated.Wait();
             }
 
-            Gameserver.ServerOnline += () => {
+            Gameserver.ServerOnline += async () => {
                 SendMessage("Servidor voltou.", "Server is now back Online.", ConsoleColor.Green, true, true);
 
-                ShowMenu();
+                await ShowMenu();
             };
 
-            Gameserver.ServerOffline += () => {
+            Gameserver.ServerOffline += async () => {
                 SendMessage("Servidor caiu. Aguardando que volte...", "Server went Offline. Waiting to come back...", ConsoleColor.Green, true, true);
 
-                ShowMenu();
+                await ShowMenu();
             };
 
             var gameInstallPath = GTASA.GetInstallPath();
@@ -292,7 +303,7 @@ namespace NostalgiaAnticheat {
 
             await Player.Login("VIRUXE", "conacona");
 
-            ShowMenu();
+            await ShowMenu();
         }
     }
 }
