@@ -70,6 +70,8 @@ namespace NostalgiaAnticheat.Game {
             }
         }
 
+        public bool Connected { get; internal set; }
+
         public static string GetInstallPath() {
             try {
                 var path = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string;
