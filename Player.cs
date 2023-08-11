@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Management;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -23,7 +25,37 @@ namespace NostalgiaAnticheat {
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("NostalgiaLauncher");
         }
 
-        public bool LoggedIn() => !string.IsNullOrEmpty(Token);
+        public bool LoggedIn => !string.IsNullOrEmpty(Token);
+
+        public async Task<bool> IsHwBanned() {
+            try {
+                using (HttpClient client = new()) {
+                    HttpResponseMessage response = await client.GetAsync($"https://api.scavengenostalgia.fun/hwid?hwid={Serial}");
+
+                    if (response.StatusCode == HttpStatusCode.Forbidden) {
+                        string result = await response.Content.ReadAsStringAsync();
+
+                        var banData = JsonSerializer.Deserialize<Dictionary<string, string>>(result);
+
+                        foreach (var item in banData) Console.WriteLine(item);
+
+                        return true;
+                    } else if (response.StatusCode == HttpStatusCode.NotFound) {
+                        return false;
+                    } else if (response.StatusCode == HttpStatusCode.BadRequest) {
+                        Console.WriteLine("Bad request. HWID parameter is not provided.");
+                        return true;
+                    } else {
+                        Console.WriteLine($"HTTP Error: {response.StatusCode}");
+                        return true;
+                    }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"An error occurred: {ex.Message}");
+            }
+
+            return true;
+        }
 
         public async Task<Dictionary<string, string>> Login(string nickname, string password) {
             try {
@@ -84,14 +116,18 @@ namespace NostalgiaAnticheat {
         }
 
         public async Task<bool> Logout() {
-            if (!LoggedIn()) return false;
+            if (!LoggedIn) return false;
 
-            Token        = null;
-            Nickname     = null;
+            Token    = null;
+            Nickname = null;
 
-            HttpResponseMessage response = await httpClient.PostAsync("https://api.scavengenostalgia.fun/logout", null);
+            try {
+                using HttpResponseMessage response = await httpClient.PostAsync("https://api.scavengenostalgia.fun/logout", null);
 
-            if (response.IsSuccessStatusCode) return true;
+                httpClient.DefaultRequestHeaders.Authorization = null;
+
+                if (response.IsSuccessStatusCode) return true; 
+            } catch {}
 
             return false;
         }
