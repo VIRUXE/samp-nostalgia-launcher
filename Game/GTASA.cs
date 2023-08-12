@@ -13,64 +13,63 @@ using System.Threading.Tasks;
 
 namespace NostalgiaAnticheat.Game {
     internal class GTASA {
+        public const string EXECUTABLE_NAME = "gta_sa.exe";
+        public const int MIN_GAME_FILES = 100;
 
-        private static readonly string[] validHashes = {
-            "8C609F108AD737DEFFBD0D17C702F5974D290C4379DE742277B809F80350DA1C",
-            "A559AA772FD136379155EFA71F00C47AAD34BBFEAE6196B0FE1047D0645CBD26",
-            "403EB9EC0BE348615697363033C1166BBA8220A720D71A87576A6B2737A9B765",
-            "f01a00ce950fa40ca1ed59df0e789848c6edcf6405456274965885d0929343ac" // EXE do Mosby
-        };
+        public static string InstallationPath {get; private set;}
+        public static Process Process;
 
-        private readonly string[] Files;
-        public readonly string Path;
-        public Process Process;
-        public bool Valid = true;
+        public static event Action GameStarted;
+        public static event Action GameExited;
 
-        public GTASA(string exePath) {
-            string gamePath = System.IO.Path.GetDirectoryName(exePath);
+        public static string ExecutablePath => IsInstallationValid ? Path.Combine(InstallationPath, EXECUTABLE_NAME) : null;
 
-            if (!Directory.Exists(gamePath)) throw new DirectoryNotFoundException();
+        public static bool IsInstallationPathValid(string installationPath) {
+            // Check if the path provided actually exists
+            if (!Directory.Exists(installationPath)) return false;
 
-            if (!exePath.EndsWith(".exe", StringComparison.InvariantCultureIgnoreCase)) throw new Exception();
+            // If the executable is valid (also checks if it's present)
+            if (!IsExecutableValid(Path.Combine(installationPath, EXECUTABLE_NAME))) return false;
 
-            if (!File.Exists(exePath)) {
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? "Essa pasta não contem 'gta_sa.exe'." : "That folder doesn't contain a 'gta_sa.exe'.");
-                return;
-            }
+            // Ensure there are enough files for a proper game installation
+            if (Directory.GetFiles(installationPath, "*", SearchOption.AllDirectories).Length < MIN_GAME_FILES) return false;
 
-            using (SHA256 sha256Hash = SHA256.Create()) {
-                if (!Array.Exists(validHashes, element => element.Equals(GetHash(sha256Hash, exePath), StringComparison.OrdinalIgnoreCase))) {
-                    Console.WriteLine(Program.SystemLanguage == Language.PT ? "Executável inválido." : "Invalid Executable.");
-                    return;
-                }
-            }
-
-            Path = gamePath;
-            Files = Directory.GetFiles(Path, "*", SearchOption.AllDirectories);
-
-            foreach (Process process in FindGTAProcesses()) {
-                try {
-                    if (ComparePath(process.MainModule.FileName) == 1) {
-                        Process = process;
-                        break;
-                    }
-                } catch { }
-            }
+            return true;
         }
 
-        public bool IsResponding => Process.Responding;
+        // Make sure our installation is valid
+        public static bool IsInstallationValid => !string.IsNullOrEmpty(InstallationPath) && IsInstallationPathValid(InstallationPath);
 
-        public bool IsRunning => Process != null && GetWindowHandle() != IntPtr.Zero;
+        public static bool SetInstallationPath(string installationPath) {
+            if (!IsInstallationPathValid(installationPath)) return false;
 
-        public bool IsFocused {
+            InstallationPath = installationPath;
+
+            StartMonitoring();
+
+            return true;
+        }
+
+        // Get all the files in the installation directory
+        public static string[] GetFiles => IsInstallationValid ? Directory.GetFiles(InstallationPath, "*", SearchOption.AllDirectories) : null;
+
+        // Used to store if the game is connected to the gameserver
+        public static bool Playing { get; internal set; }
+
+        public static bool IsRunning => Process?.MainWindowHandle != IntPtr.Zero;
+
+        public static bool IsResponding => IsRunning && Process?.Responding == true;
+
+        public static List<string> Modules => IsRunning ? Process.Modules.Cast<ProcessModule>().Select(m => m.ModuleName).ToList() : null;
+
+        public static bool IsFocused {
             get {
-                IntPtr windowHandle = GetWindowHandle();
+                if (Process == null || Process.HasExited) return false;
 
-                return IsRunning && windowHandle != IntPtr.Zero && windowHandle == GetForegroundWindow();
+                IntPtr windowHandle = Process.MainWindowHandle;
+                return windowHandle != IntPtr.Zero && windowHandle == GetForegroundWindow();
             }
         }
-
-        public bool Connected { get; internal set; }
 
         public static string GetInstallPath() {
             try {
@@ -175,92 +174,22 @@ namespace NostalgiaAnticheat.Game {
             return directoryPath;
         }
 
-        public void Verify() {
-
-        }
-
-        public bool Launch() {
+        public static bool Launch() {
             if (IsRunning) {
                 Focus();
 
                 return false;
             }
-            ProcessStartInfo startInfo = new() {
-                FileName = Path + "\\samp.exe",
-                Arguments = "sv.scavengenostalgia.fun:7777"
-            };
 
-            Process = Process.Start(startInfo);
+            Process = Process.Start(new ProcessStartInfo() {
+                FileName  = InstallationPath + "\\samp.exe",
+                Arguments = "sv.scavengenostalgia.fun:7777"
+            });
 
             return true;
         }
 
-        public int ComparePath(string path) {
-            if (string.IsNullOrEmpty(path)) return -1;
-            if (string.IsNullOrEmpty(Path)) return -2;
-
-            if (Path.Contains(System.IO.Path.GetDirectoryName(path))) return 1;
-
-            return 0;
-        }
-
-        private static string GetHash(HashAlgorithm hashAlgorithm, string input) {
-            using (FileStream stream = File.OpenRead(input)) {
-                // Compute the hash of the input file
-                byte[] hash = hashAlgorithm.ComputeHash(stream);
-
-                // Convert the byte array to hexadecimal string
-                StringBuilder sb = new();
-                for (var i = 0; i < hash.Length; i++) sb.Append(hash[i].ToString("X2"));
-
-                return sb.ToString();
-            }
-        }
-
-        public int GetFileCount() => Files.Length;
-
-        public IEnumerable<(string FilePath, long Length)> GetFileList() {
-            if (Files.Length == 0) return Enumerable.Empty<(string FilePath, long Length)>();
-
-            return Files.Select(file => (System.IO.Path.GetRelativePath(Path, file), new FileInfo(file).Length));
-        }
-
-        // System functions for handling Window Focus
-        [DllImport("User32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("User32.dll")]
-        private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("User32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        /*[DllImport("user32.dll", SetLastError = true)]
-        static extern IntPtr FindWindow(string lpClassName, string lpWindowName);*/
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-        public bool SendKeys(string text) {
-            if (Process == null) return false;
-
-            IntPtr gameWindow = GetWindowHandle();
-
-            if (gameWindow != IntPtr.Zero) {
-                if (!IsFocused) Focus();
-
-                Keyboard.PressF6();
-                Thread.Sleep(100);
-                foreach (char ch in text) SendMessage(gameWindow, 0x0102, (IntPtr)ch, IntPtr.Zero);
-                Keyboard.PressEnter();
-
-                return true;
-            }
-
-            return false;
-        }
-
-        public async Task<bool> Close() {
+        public static async Task<bool> Close() {
             if (!IsRunning) return false;
 
             Process.Kill();
@@ -270,45 +199,101 @@ namespace NostalgiaAnticheat.Game {
             return true;
         }
 
-        public bool Focus() {
+        public static bool Focus() {
             if (!IsRunning || IsFocused) return false;
 
-            IntPtr windowHandle = GetWindowHandle();
+            IntPtr windowHandle = Process.MainWindowHandle;
 
-            if (windowHandle != IntPtr.Zero) {
-                ShowWindow(windowHandle, 1);
-                SetForegroundWindow(windowHandle);
+            if (windowHandle == IntPtr.Zero) return false;
 
-                return true;
-            }
+            ShowWindow(windowHandle, 1);
+            SetForegroundWindow(windowHandle);
 
-            return false;
+            return true;
         }
 
-        public IntPtr GetWindowHandle() {
-            if (Process.MainWindowHandle != IntPtr.Zero) return Process.MainWindowHandle;
+        private static bool IsExecutableValid(string executablePath) {
+            if(!File.Exists(executablePath)) return false;
 
-            Process newProcess = FindGTAProcesses().FirstOrDefault();
+            string[] validHashes = {
+                "8C609F108AD737DEFFBD0D17C702F5974D290C4379DE742277B809F80350DA1C",
+                "A559AA772FD136379155EFA71F00C47AAD34BBFEAE6196B0FE1047D0645CBD26",
+                "403EB9EC0BE348615697363033C1166BBA8220A720D71A87576A6B2737A9B765",
+                "f01a00ce950fa40ca1ed59df0e789848c6edcf6405456274965885d0929343ac"
+            };
 
-            if (newProcess != null) Process = newProcess;
+            using SHA256 sha256Hash = SHA256.Create();
+            using FileStream stream = File.OpenRead(executablePath);
 
-            return Process.MainWindowHandle;
+            // Compute the hash of the executable
+            byte[] hash = sha256Hash.ComputeHash(stream);
+
+            // Convert the byte array to hexadecimal string
+            StringBuilder sb = new();
+            foreach (var byteValue in hash) sb.Append(byteValue.ToString("X2"));
+
+            return validHashes.Contains(sb.ToString(), StringComparer.OrdinalIgnoreCase);
         }
 
-        public static IEnumerable<Process> FindGTAProcesses() {
+        private static IEnumerable<Process> GetAllGTAProcesses() {
             return Process.GetProcesses()
                 .Where(p => !p.ProcessName.StartsWith("System") && !p.ProcessName.StartsWith("Idle"))
                 .Where(p => {
                     try {
                         string windowTitle = p.MainWindowTitle.ToLower();
-
                         return windowTitle != string.Empty &&
                                (windowTitle.Contains("gta san andreas") || windowTitle.Contains("gta:sa:mp")) &&
-                               p.MainModule.ModuleName.ToLower() == "gta_sa.exe";
-                    } catch { }
-
-                    return false;
+                               p.MainModule.ModuleName.ToLower() == EXECUTABLE_NAME;
+                    } catch {
+                        return false;
+                    }
                 });
         }
+
+        /// <summary>
+        /// Starts monitoring for the GTA SA processes. Kills any non-legitimate instances of the game and raises events when the game starts or exits.
+        /// </summary>
+        private static async void StartMonitoring() {
+            await Task.Run(() => {
+                while (true) {
+                    // Get a list of all currently running GTA processes
+                    // Loop through each GTA process found
+                    foreach (var process in GetAllGTAProcesses()) {
+                        // If the process path doesn't match our installation path, it's not a legitimate process and we should kill it
+                        if (process.MainModule.FileName != InstallationPath) process.Kill();
+
+                        // If our currently tracked process is null, has exited, or is different from the current process in loop
+                        else if (Process == null || Process.HasExited || Process.Id != process.Id) {
+                            // If we currently don't have a process tracked or it has exited, raise the GameStarted event
+                            if (Process == null || Process.HasExited)
+                                GameStarted?.Invoke();
+                            // Assign the current process in loop as our main GTA process to track
+                            Process = process;
+                        }
+                    }
+
+                    // If we're tracking a process but it has exited, raise the GameExited event and reset the tracked process
+                    if (IsRunning && Process.HasExited) {
+                        GameExited?.Invoke();
+                        Process = null;
+                    }
+
+                    // Pause the loop for 1 second before checking again
+                    Thread.Sleep(1000);
+                }
+            });
+        }
+
+        [DllImport("User32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("User32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("User32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     }
 }

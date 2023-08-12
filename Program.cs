@@ -1,12 +1,10 @@
-﻿using System;
+﻿using NostalgiaAnticheat.Game;
+using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-
-using NostalgiaAnticheat.Game;
 
 namespace NostalgiaAnticheat {
     public record MenuOption((string PT, string EN) Name, Func<Task> Action, Func<bool> Condition);
@@ -15,8 +13,7 @@ namespace NostalgiaAnticheat {
 
     internal class Program {
         public static Language SystemLanguage = Language.EN;
-        private static GTASA Game;
-        private static readonly Player Player = new();
+        private static readonly Player Player;
         private static readonly LogWatcher LogWatcher = new();
 
         public static string SendMessage(string ptMessage, string enMessage = null, ConsoleColor color = ConsoleColor.Gray, bool newLine = true, bool isAction = false) {
@@ -54,6 +51,7 @@ namespace NostalgiaAnticheat {
                         Console.Write("\b \b");
                     }
                 }
+
                 info = Console.ReadKey(true);
             }
 
@@ -104,7 +102,7 @@ namespace NostalgiaAnticheat {
                                 "Now, enter your password (entries will be hidden for security reasons):",
                                 ConsoleColor.Cyan);
                     },
-                    () => !Player.LoggedIn && Game.ComparePath(SAMP.GetGamePath()) == 1 && Gameserver.IsOnline && Game.Valid
+                    () => !Player.LoggedIn && Gameserver.IsOnline
                 ),
                 new MenuOption(
                     ("Deslogar", "Logout"),
@@ -119,48 +117,48 @@ namespace NostalgiaAnticheat {
                 new MenuOption(
                     ("Jogar", "Play"),
                     async () => {
-                        if (Game.Launch())
-                            SendMessage("Jogo Iniciado. Esperando conexão... ", "Game Started. Waiting for connection... ", ConsoleColor.White, false, true);
+                        if (GTASA.Launch())
+                            SendMessage("Jogo Iniciado. Esperando conexão... ", "GTASA Started. Waiting for connection... ", ConsoleColor.White, false, true);
                         else
-                            SendMessage("O jogo já se encontra iniciado. Focando na tela.", "The game is already running. Showing window.", ConsoleColor.Yellow, true, true);
+                            SendMessage("O jogo já se encontra iniciado. Focando na tela.", "The GTASA is already running. Showing window.", ConsoleColor.Yellow, true, true);
 
-                        do await Task.Delay(1000); while (!Game.Connected);
+                        do await Task.Delay(1000); while (!GTASA.Playing);
                     },
-                    () => Player.LoggedIn && !Game.IsRunning && Game.ComparePath(SAMP.GetGamePath()) == 1 && Gameserver.IsOnline && Game.Valid
+                    () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsInstallationValid
                 ),
                 new MenuOption(
-                    ("Verificar Arquivos do Jogo", "Verify Game Files"),
+                    ("Verificar Arquivos do Jogo", "Verify GTASA Files"),
                     () => {
-                        Game.Verify();
+                        //GTASA.Verify();
                         return Task.CompletedTask;
                     },
-                    () => Player.LoggedIn && !Game.IsRunning
+                    () => Player.LoggedIn && !GTASA.IsRunning
                 ),
                 new MenuOption(
-                    ("Focar no Jogo", "Focus on Game"),
+                    ("Focar no Jogo", "Focus on GTASA"),
                     () => {
-                        if (Game.Focus()) 
-                            SendMessage("Jogo focado na tela.", "Focused on Game", ConsoleColor.Green, true, true);
+                        if (GTASA.Focus()) 
+                            SendMessage("Jogo focado na tela.", "Focused on GTASA", ConsoleColor.Green, true, true);
                         else 
-                            SendMessage("O jogo já se encontra na tela.", "You're already focused on the game.", ConsoleColor.Yellow, true, true);
+                            SendMessage("O jogo já se encontra na tela.", "You're already focused on the GTASA.", ConsoleColor.Yellow, true, true);
 
                         return Task.CompletedTask;
                     },
-                    () => Game.IsRunning
+                    () => GTASA.IsRunning
                 ),
                 new MenuOption(
-                    ("Fechar Jogo", "Close Game"),
+                    ("Fechar Jogo", "Close GTASA"),
                     async () => {
                         SendMessage("Fechando", "Closing", ConsoleColor.Yellow, false, true);
 
                         Console.Write("... ");
 
-                        if (await Game.Close()) 
+                        if (await GTASA.Close()) 
                             SendMessage("Fechado.", "Closed.", ConsoleColor.Green);
                         else 
                             SendMessage("Impossivel fechar.", "Unable to Close.", ConsoleColor.Red);
                     },
-                    () => Game.IsRunning
+                    () => GTASA.IsRunning
                 )
             };
 
@@ -203,11 +201,11 @@ namespace NostalgiaAnticheat {
         }
 
         private static async void LogMonitor_OnConnected(object sender, EventArgs e) {
-            do await Task.Delay(1000); while (!Game.IsResponding);
+            do await Task.Delay(1000); while (!GTASA.IsResponding);
 
-            Game.Connected = true;
+            GTASA.Playing = true;
 
-            SendMessage("Conexão ao servidor de jogo estabelecida.", "Connected to the gameserver.", ConsoleColor.Green, true, false);
+            SendMessage("Conexão ao servidor de jogo estabelecida.", "Playing to the gameserver.", ConsoleColor.Green, true, false);
 
             //await Task.Delay(10000);
 
@@ -215,11 +213,11 @@ namespace NostalgiaAnticheat {
 
             _ = SAMP_API.API.AddChatMessage("Anti-Cheat ativo.");
 
-            /*if (Game.SendKeys("/2fa 1a2b3c"))
+            /*if (GTASA.SendKeys("/2fa 1a2b3c"))
                 SendMessage("Autenticação enviada.", "Authentication sent.", ConsoleColor.Green, true, true);
             else {
-                SendMessage("Autenticação falhou. Fechando o Jogo.", "Authentication failed. Closing game.", ConsoleColor.Red, true, true);
-                _ = Game.Close();
+                SendMessage("Autenticação falhou. Fechando o Jogo.", "Authentication failed. Closing GTASA.", ConsoleColor.Red, true, true);
+                _ = GTASA.Close();
             }*/
 
             await ShowMenu();
@@ -283,7 +281,7 @@ namespace NostalgiaAnticheat {
             SendMessage(gameInstallPath, null, ConsoleColor.Magenta);
 
             if (!string.IsNullOrEmpty(sampGamePath) && !string.IsNullOrEmpty(playerName)) {
-                SendMessage("Caminho do Jogo no SA-MP: ", "SA-MP's Game Path: ", ConsoleColor.Gray, false);
+                SendMessage("Caminho do Jogo no SA-MP: ", "SA-MP's GTASA Path: ", ConsoleColor.Gray, false);
                 SendMessage(sampGamePath, null, ConsoleColor.Magenta);
 
                 Console.Write("Nickname: ");
@@ -296,8 +294,6 @@ namespace NostalgiaAnticheat {
                 Console.ForegroundColor = ConsoleColor.Magenta;
                 Console.WriteLine(!string.IsNullOrEmpty(sampVersion) ? $"R{sampVersion}" : SendMessage("Desconhecida", "Unknown"));
                 Console.ResetColor();*/
-
-            Game = new GTASA(sampGamePath);
 
             LogWatcher.Start();
 

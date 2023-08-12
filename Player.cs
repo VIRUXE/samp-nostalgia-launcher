@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Management;
 using System.Net;
 using System.Net.Http;
@@ -10,59 +9,81 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
+using NostalgiaAnticheat.Game;
+
 namespace NostalgiaAnticheat {
+
+    public class PingResponse {
+        public string Message;
+        public List<ResponseAction> Actions { get; set; }
+    }
+
+    public class ResponseAction {
+        public ResponseType Type { get; set; }
+        public string Target { get; set; }
+    }
+
+    public enum ResponseType { 
+        Screenshot
+    }
+
     internal class Player {
-        private readonly HttpClient httpClient = new();
-        public string Nickname;
-        public string Serial;
-        private string Token;
+        private const string API_ADDR = "https://api.scavengenostalgia.fun";
+
+        public record struct PingData(IEnumerable<(string FileName, string WindowTitle)> openWindows, List<string> modules);
+
+        private readonly HttpClient _httpClient = new();
+        private Timer _pinger;
+        private readonly string _hwid;
+        public bool LoggedIn => !string.IsNullOrEmpty(Nickname);
+        public string Nickname { get; private set; }
 
         public Player() {
-            Serial = GetHWID();
+            _hwid = GetHWID();
 
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("NostalgiaLauncher");
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("NostalgiaLauncher");
         }
 
-        public bool LoggedIn => !string.IsNullOrEmpty(Token);
+        private async void OnPingEvent(object state) {
+            if (!GTASA.IsRunning) return;
 
-        public async Task<bool> IsHwBanned() {
             try {
-                using (HttpClient client = new()) {
-                    HttpResponseMessage response = await client.GetAsync($"https://api.scavengenostalgia.fun/hwid?hwid={Serial}");
+                var response = await _httpClient.PostAsJsonAsync(API_ADDR + "/ping", new PingData(OS.GetOpenWindows(), new List<string> { }));
 
-                    if (response.StatusCode == HttpStatusCode.Forbidden) {
-                        string result = await response.Content.ReadAsStringAsync();
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var parsedResponse = JsonSerializer.Deserialize<PingResponse>(responseContent);
 
-                        var banData = JsonSerializer.Deserialize<Dictionary<string, string>>(result);
+                if(parsedResponse.Message != null) { // API doesn't like you
+                    await Logout(parsedResponse.Message);
+                    return;
+                }
 
-                        foreach (var item in banData) Console.WriteLine(item);
-
-                        return true;
-                    } else if (response.StatusCode == HttpStatusCode.NotFound) {
-                        return false;
-                    } else if (response.StatusCode == HttpStatusCode.BadRequest) {
-                        Console.WriteLine("Bad request. HWID parameter is not provided.");
-                        return true;
-                    } else {
-                        Console.WriteLine($"HTTP Error: {response.StatusCode}");
-                        return true;
+                // We're good so let's complete Actions if we have any
+                foreach (var action in parsedResponse.Actions) {
+                    switch (action.Type) {
+                        case ResponseType.Screenshot:
+                            // Handle ActionType1 targeting action.Target
+                            break;
+                            // ... Add other cases as needed
                     }
                 }
-            } catch (Exception ex) {
-                Console.WriteLine($"An error occurred: {ex.Message}");
-            }
 
-            return true;
+            } catch (HttpRequestException e) {
+                await Logout($"API Error: {e.Message}");
+            } catch (Exception e) {
+                await Logout($"Unexpected Error: {e.Message}");
+            }
         }
 
         public async Task<Dictionary<string, string>> Login(string nickname, string password) {
             try {
-                using HttpResponseMessage response = await httpClient.PostAsync("https://api.scavengenostalgia.fun/login", new StringContent(JsonSerializer.Serialize(new {
+                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/login", new StringContent(JsonSerializer.Serialize(new {
                     nickname,
                     password,
-                    serial    = Serial,
+                    serial    = _hwid,
                     version   = Assembly.GetExecutingAssembly().GetName().Version.ToString(),
                     timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                 }), Encoding.UTF8, "application/json"));
@@ -73,10 +94,13 @@ namespace NostalgiaAnticheat {
                     var resultData = JsonSerializer.Deserialize<Dictionary<string, string>>(result);
 
                     if (resultData != null && resultData.ContainsKey("token")) {
-                        Token    = resultData["token"];
                         Nickname = nickname; // ? It may be different for some reason?
 
-                        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token);
+                        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resultData["token"]);
+
+                        // Start the /ping timer
+                        _pinger?.Dispose();
+                        _pinger = new(OnPingEvent, null, 0, 1000);
 
                         return resultData;
                     }
@@ -115,21 +139,52 @@ namespace NostalgiaAnticheat {
             return new Dictionary<string, string>();
         }
 
-        public async Task<bool> Logout() {
+        public async Task<bool> Logout(string message = null) {
             if (!LoggedIn) return false;
 
-            Token    = null;
             Nickname = null;
 
-            try {
-                using HttpResponseMessage response = await httpClient.PostAsync("https://api.scavengenostalgia.fun/logout", null);
+            if (!string.IsNullOrEmpty(message)) Console.WriteLine($"Logout Message: {message}");
 
-                httpClient.DefaultRequestHeaders.Authorization = null;
+            try {
+                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/logout", null);
+
+                _httpClient.DefaultRequestHeaders.Authorization = null;
 
                 if (response.IsSuccessStatusCode) return true; 
             } catch {}
 
             return false;
+        }
+
+        public async Task<bool> IsHwBanned() {
+            try {
+                using (HttpClient client = new()) {
+                    HttpResponseMessage response = await client.GetAsync(API_ADDR + $"/hwid/{_hwid}");
+
+                    if (response.StatusCode == HttpStatusCode.Forbidden) {
+                        string result = await response.Content.ReadAsStringAsync();
+
+                        var banData = JsonSerializer.Deserialize<Dictionary<string, string>>(result);
+
+                        foreach (var item in banData) Console.WriteLine(item);
+
+                        return true;
+                    } else if (response.StatusCode == HttpStatusCode.NotFound) {
+                        return false;
+                    } else if (response.StatusCode == HttpStatusCode.BadRequest) {
+                        Console.WriteLine("Bad request. HWID parameter is not provided.");
+                        return true;
+                    } else {
+                        Console.WriteLine($"HTTP Error: {response.StatusCode}");
+                        return true;
+                    }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"An error occurred: {ex.Message}");
+            }
+
+            return true;
         }
 
         private static string GetHWID() {
@@ -141,7 +196,7 @@ namespace NostalgiaAnticheat {
                 break;
             }
 
-            // Get volume serial number
+            // Get volume _hwid number
             ManagementObject dsk = new(@"win32_logicaldisk.deviceid=""c:""");
             dsk.Get();
 
