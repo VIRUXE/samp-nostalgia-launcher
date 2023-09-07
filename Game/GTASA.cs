@@ -25,14 +25,16 @@ namespace NostalgiaAnticheat.Game {
         public static string ExecutablePath => IsInstallationValid ? Path.Combine(InstallationPath, EXECUTABLE_NAME) : null;
 
         public static bool IsInstallationPathValid(string installationPath) {
+            var path = Path.GetDirectoryName(installationPath);
+
             // Check if the path provided actually exists
-            if (!Directory.Exists(installationPath)) return false;
+            if (!Directory.Exists(path)) return false;
 
             // If the executable is valid (also checks if it's present)
-            if (!IsExecutableValid(Path.Combine(installationPath, EXECUTABLE_NAME))) return false;
+            if (!IsExecutableValid(Path.Combine(path, EXECUTABLE_NAME))) return false;
 
             // Ensure there are enough files for a proper game installation
-            if (Directory.GetFiles(installationPath, "*", SearchOption.AllDirectories).Length < MIN_GAME_FILES) return false;
+            if (Directory.GetFiles(path, "*", SearchOption.AllDirectories).Length < MIN_GAME_FILES) return false;
 
             return true;
         }
@@ -56,7 +58,7 @@ namespace NostalgiaAnticheat.Game {
         // Used to store if the game is connected to the gameserver
         public static bool Playing { get; internal set; }
 
-        public static bool IsRunning => Process?.MainWindowHandle != IntPtr.Zero;
+        public static bool IsRunning => Process != null && Process.MainWindowHandle != IntPtr.Zero;
 
         public static bool IsResponding => IsRunning && Process?.Responding == true;
 
@@ -137,39 +139,35 @@ namespace NostalgiaAnticheat.Game {
             const char progressBlock = '█';
             const char emptyBlock = '.';
 
-            using (HttpClient client = new()) {
-                using (HttpResponseMessage response = await client.GetAsync("http://www.scavengenostalgia.fun/baixar/cleangtasa-small.7z", HttpCompletionOption.ResponseHeadersRead)) {
-                    response.EnsureSuccessStatusCode();
+            using HttpResponseMessage response = await new HttpClient().GetAsync("http://www.scavengenostalgia.fun/baixar/cleangtasa-small.7z", HttpCompletionOption.ResponseHeadersRead);
 
-                    long contentLength = response.Content.Headers.ContentLength.GetValueOrDefault(0);
-                    if (contentLength == 0) {
-                        throw new Exception("The content length could not be determined.");
-                    }
+            response.EnsureSuccessStatusCode();
 
-                    using (Stream contentStream = await response.Content.ReadAsStreamAsync(), fileStream = new FileStream(downloadFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true)) {
-                        var totalRead = 0L;
-                        var buffer = new byte[8192];
-                        var isMoreToRead = true;
+            long contentLength = response.Content.Headers.ContentLength.GetValueOrDefault(0);
+            if (contentLength == 0) throw new Exception("The content length could not be determined.");
 
-                        do {
-                            int read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
-                            if (read == 0) {
-                                isMoreToRead = false;
-                            } else {
-                                await fileStream.WriteAsync(buffer, 0, read);
+            using Stream contentStream = await response.Content.ReadAsStreamAsync(), fileStream = new FileStream(downloadFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
 
-                                totalRead += read;
-                                double progress = (double)totalRead / contentLength;
-                                var blocksCount = (int)Math.Round(progress * totalBlocks);
-                                string progressBar = new string(progressBlock, blocksCount) + new string(emptyBlock, totalBlocks - blocksCount);
+            var totalRead = 0L;
+            var buffer = new byte[8192];
+            var isMoreToRead = true;
 
-                                Console.CursorLeft = 0;
-                                Console.Write($"[{progressBar}] {progress:P1}");
-                            }
-                        } while (isMoreToRead);
-                    }
+            do {
+                int read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
+                if (read == 0)
+                    isMoreToRead = false;
+                else {
+                    await fileStream.WriteAsync(buffer, 0, read);
+
+                    totalRead += read;
+                    double progress = (double)totalRead / contentLength;
+                    var blocksCount = (int)Math.Round(progress * totalBlocks);
+                    string progressBar = new string(progressBlock, blocksCount) + new string(emptyBlock, totalBlocks - blocksCount);
+
+                    Console.CursorLeft = 0;
+                    Console.Write($"[{progressBar}] {progress:P1}");
                 }
-            }
+            } while (isMoreToRead);
 
             return directoryPath;
         }
@@ -222,11 +220,8 @@ namespace NostalgiaAnticheat.Game {
                 "f01a00ce950fa40ca1ed59df0e789848c6edcf6405456274965885d0929343ac"
             };
 
-            using SHA256 sha256Hash = SHA256.Create();
-            using FileStream stream = File.OpenRead(executablePath);
-
             // Compute the hash of the executable
-            byte[] hash = sha256Hash.ComputeHash(stream);
+            byte[] hash = SHA256.Create().ComputeHash(File.OpenRead(executablePath));
 
             // Convert the byte array to hexadecimal string
             StringBuilder sb = new();
@@ -260,13 +255,16 @@ namespace NostalgiaAnticheat.Game {
                     // Loop through each GTA process found
                     foreach (var process in GetAllGTAProcesses()) {
                         // If the process path doesn't match our installation path, it's not a legitimate process and we should kill it
-                        if (process.MainModule.FileName != InstallationPath) process.Kill();
+                        if (process.MainModule.FileName != InstallationPath) { 
+                            process.Kill();
+                            continue;
+                        }
 
                         // If our currently tracked process is null, has exited, or is different from the current process in loop
-                        else if (Process == null || Process.HasExited || Process.Id != process.Id) {
+                        if (Process == null || Process.HasExited || Process.Id != process.Id) {
                             // If we currently don't have a process tracked or it has exited, raise the GameStarted event
-                            if (Process == null || Process.HasExited)
-                                GameStarted?.Invoke();
+                            if (Process == null || Process.HasExited) GameStarted?.Invoke();
+
                             // Assign the current process in loop as our main GTA process to track
                             Process = process;
                         }
@@ -282,6 +280,11 @@ namespace NostalgiaAnticheat.Game {
                     Thread.Sleep(1000);
                 }
             });
+        }
+
+        private static string gpci() {
+
+            return string.Empty;
         }
 
         [DllImport("User32.dll")]
