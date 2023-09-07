@@ -3,12 +3,14 @@ using System.IO;
 using System.Threading;
 
 namespace NostalgiaAnticheat {
+    public static class LogWatcher {
+        private static readonly FileSystemWatcher fileSystemWatcher;
+        private static long lastReadLength;
 
-    public class LogWatcher {
-        private readonly FileSystemWatcher fileSystemWatcher;
-        private long lastReadLength;
+        public static event EventHandler OnConnecting;
+        public static event EventHandler OnConnected;
 
-        public LogWatcher() {
+        static LogWatcher() {
             fileSystemWatcher = new FileSystemWatcher {
                 Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), @"GTA San Andreas User Files\SAMP"),
                 Filter = "chatlog.txt",
@@ -18,53 +20,42 @@ namespace NostalgiaAnticheat {
             fileSystemWatcher.Changed += OnChanged;
         }
 
-        public event EventHandler OnConnecting;
-        public event EventHandler OnConnected;
-
-        public void Start() {
+        public static void Start() {
             fileSystemWatcher.EnableRaisingEvents = true;
         }
 
-        public void Stop() {
+        public static void Stop() {
             fileSystemWatcher.EnableRaisingEvents = false;
         }
 
-        private void OnChanged(object sender, FileSystemEventArgs e) {
+        private static void OnChanged(object sender, FileSystemEventArgs e) {
             // If the file is being written to, we wait a moment to let the write finish
-            while (IsFileLocked(new FileInfo(e.FullPath))) Thread.Sleep(1000);
+            while(IsFileLocked(new FileInfo(e.FullPath))) Thread.Sleep(1000);
 
-            using (FileStream fileStream = new FileStream(e.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
-                // If the file length is less than the last read length, the file was recreated, reset the last read length
-                if (fileStream.Length < lastReadLength) lastReadLength = 0;
+            // Open a filestream on the chatlog file to read it
+            using FileStream fileStream = new(e.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
-                // Seek to the last read position
-                fileStream.Seek(lastReadLength, SeekOrigin.Begin);
+            // If the file length is less than the last read length, the file was recreated, reset the last read length
+            if(fileStream.Length < lastReadLength) lastReadLength = 0;
 
-                using (StreamReader reader = new StreamReader(fileStream)) {
-                    string line;
+            // Seek to the last read position
+            fileStream.Seek(lastReadLength, SeekOrigin.Begin);
 
-                    while ((line = reader.ReadLine()) != null) {
-                        if (string.IsNullOrEmpty(line)) continue;
+            using StreamReader reader = new(fileStream);
 
-                        /*if (line.Contains("Connecting to 216.238.113.189:7777")) {
-                            OnLineMatched?.Invoke(this, new LineMatchedEventArgs { Line = line });
-                            break;
-                        }*/
+            string line;
 
-                        // Trigger the Connecting event
-                        if (line.Contains("Connecting to 216.238.113.189:7777")) {
-                            OnConnecting?.Invoke(this, EventArgs.Empty);
-                        }
+            while((line = reader.ReadLine()) != null) {
+                if (string.IsNullOrEmpty(line)) continue; // Ignore empty lines
 
-                        // Trigger the Connected event
-                        if (line.Contains("Connected to")) {
-                            OnConnected?.Invoke(this, EventArgs.Empty);
-                        }
-                    }
-
-                    lastReadLength = fileStream.Position;
+                if (line.Contains("Connecting to 216.238.113.189:7777")) {
+                    OnConnecting?.Invoke(null, EventArgs.Empty);
+                } else if (line.Contains("Connected to")) {
+                    OnConnected?.Invoke(null, EventArgs.Empty);
                 }
             }
+
+            lastReadLength = fileStream.Position;
         }
 
         private static bool IsFileLocked(FileInfo file) {
@@ -81,5 +72,4 @@ namespace NostalgiaAnticheat {
             return false;
         }
     }
-
 }
