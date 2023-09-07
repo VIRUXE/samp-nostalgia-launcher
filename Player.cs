@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Management;
 using System.Net;
 using System.Net.Http;
@@ -15,7 +18,7 @@ using System.Threading.Tasks;
 using NostalgiaAnticheat.Game;
 
 namespace NostalgiaAnticheat {
-
+    #region Ping Response
     public class PingResponse {
         public string Message;
         public List<ResponseAction> Actions { get; set; }
@@ -26,65 +29,86 @@ namespace NostalgiaAnticheat {
         public string Target { get; set; }
     }
 
-    public enum ResponseType { 
+    public enum ResponseType {
         Screenshot
     }
+    #endregion
 
-    internal class Player {
+    public static class Player {
         private const string API_ADDR = "https://api.scavengenostalgia.fun";
 
         public record struct PingData(IEnumerable<(string FileName, string WindowTitle)> openWindows, List<string> modules);
 
-        private readonly HttpClient _httpClient = new();
-        private Timer _pinger;
-        private readonly string _hwid;
-        public bool LoggedIn => !string.IsNullOrEmpty(Nickname);
-        public string Nickname { get; private set; }
+        private static readonly HttpClient _httpClient = new();
+        private static Timer _pinger;
+        private static readonly string _hwid;
+        private static readonly string _gpci;
+        public static bool LoggedIn => !string.IsNullOrEmpty(Nickname);
+        public static string Nickname { get; private set; }
 
-        public Player() {
+        static Player() {
+            _gpci = gpci();
             _hwid = GetHWID();
 
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("NostalgiaLauncher");
+
+            Debug.WriteLine(_gpci);
         }
 
-        private async void OnPingEvent(object state) {
+        private static async void OnPingEvent(object state) {
             if (!GTASA.IsRunning) return;
 
             try {
-                var response = await _httpClient.PostAsJsonAsync(API_ADDR + "/ping", new PingData(OS.GetOpenWindows(), new List<string> { }));
+                var response = await _httpClient.PostAsJsonAsync(API_ADDR + "/player/ping", new PingData(OS.GetOpenWindows(), new List<string> { }));
 
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var parsedResponse = JsonSerializer.Deserialize<PingResponse>(responseContent);
+                if (response.IsSuccessStatusCode) { // Meaning the data we sent is good
+                    // Now we check if there is content to download
+                    var responseContent = await response.Content.ReadAsStringAsync();
 
-                if(parsedResponse.Message != null) { // API doesn't like you
-                    await Logout(parsedResponse.Message);
-                    return;
-                }
+                    if (!string.IsNullOrEmpty(responseContent)) { 
+                        var parsedResponse = JsonSerializer.Deserialize<PingResponse>(responseContent);
 
-                // We're good so let's complete Actions if we have any
-                foreach (var action in parsedResponse.Actions) {
-                    switch (action.Type) {
-                        case ResponseType.Screenshot:
-                            // Handle ActionType1 targeting action.Target
-                            break;
-                            // ... Add other cases as needed
+                        if (parsedResponse.Message != null) 
+                            await Logout(parsedResponse.Message); // API doesn't like you
+                        else {
+                            // We're good so let's complete Actions if we have any
+                            foreach (var action in parsedResponse.Actions) {
+                                switch (action.Type) {
+                                    case ResponseType.Screenshot:
+                                        // Handle ActionType1 targeting action.Target
+                                        break;
+                                        // ... Add other cases as needed
+                                }
+                            }
+                        }
                     }
+                } else if (response.StatusCode == HttpStatusCode.BadRequest) {
+                    await Logout("[HEARTBEAT] Naughty naughty...");
+                } else if (response.StatusCode == HttpStatusCode.Unauthorized) {
+                    Console.WriteLine("[HEARTBEAT] Unauthorized. Ensure correct authentication.");
+                } else if (response.StatusCode == HttpStatusCode.InternalServerError) {
+                    Console.WriteLine("[HEARTBEAT] Internal server error. Check server logs.");
+                } else {
+                    Console.WriteLine($"[HEARTBEAT] HTTP Error: {response.StatusCode}");
                 }
-
             } catch (HttpRequestException e) {
-                await Logout($"API Error: {e.Message}");
+                Console.WriteLine($"[HEARTBEAT] HTTP Request Error: {e.Message}");
+            } catch (JsonException e) {
+                Console.WriteLine($"[HEARTBEAT] JSON Deserialization Error: {e.Message}");
             } catch (Exception e) {
-                await Logout($"Unexpected Error: {e.Message}");
+                Console.WriteLine($"[HEARTBEAT] Unexpected Error: {e.Message}");
             }
+
+            return;
         }
 
-        public async Task<Dictionary<string, string>> Login(string nickname, string password) {
+        public static async Task<Dictionary<string, string>> Login(string nickname, string password) {
             try {
-                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/login", new StringContent(JsonSerializer.Serialize(new {
+                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/player/login", new StringContent(JsonSerializer.Serialize(new {
                     nickname,
                     password,
-                    serial    = _hwid,
-                    version   = Assembly.GetExecutingAssembly().GetName().Version.ToString(),
+                    serial = _hwid,
+                    version = Assembly.GetExecutingAssembly().GetName().Version.ToString(),
                     timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                 }), Encoding.UTF8, "application/json"));
 
@@ -139,7 +163,7 @@ namespace NostalgiaAnticheat {
             return new Dictionary<string, string>();
         }
 
-        public async Task<bool> Logout(string message = null) {
+        public static async Task<bool> Logout(string message = null) {
             if (!LoggedIn) return false;
 
             Nickname = null;
@@ -147,17 +171,17 @@ namespace NostalgiaAnticheat {
             if (!string.IsNullOrEmpty(message)) Console.WriteLine($"Logout Message: {message}");
 
             try {
-                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/logout", null);
+                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/player/logout", null);
 
                 _httpClient.DefaultRequestHeaders.Authorization = null;
 
-                if (response.IsSuccessStatusCode) return true; 
-            } catch {}
+                if (response.IsSuccessStatusCode) return true;
+            } catch { }
 
             return false;
         }
 
-        public async Task<bool> IsHwBanned() {
+        public static async Task<bool> IsHwBanned() {
             try {
                 using (HttpClient client = new()) {
                     HttpResponseMessage response = await client.GetAsync(API_ADDR + $"/hwid/{_hwid}");
@@ -187,6 +211,36 @@ namespace NostalgiaAnticheat {
             return true;
         }
 
+        private static string gpci() {
+            byte[] GPCI_SBOX = {
+                0,   4,   8,   12,  4,   5,   9,   13,  8,   9,   10,  14,  12,  13,  14,  15,
+                64,  68,  72,  76,  68,  69,  73,  77,  72,  73,  74,  78,  76,  77,  78,  79,
+                128, 132, 136, 140, 132, 133, 137, 141, 136, 137, 138, 142, 140, 141, 142, 143,
+                192, 196, 200, 204, 196, 197, 201, 205, 200, 201, 202, 206, 204, 205, 206, 207,
+                64,  68,  72,  76,  68,  69,  73,  77,  72,  73,  74,  78,  76,  77,  78,  79,
+                80,  84,  88,  92,  84,  85,  89,  93,  88,  89,  90,  94,  92,  93,  94,  95,
+                144, 148, 152, 156, 148, 149, 153, 157, 152, 153, 154, 158, 156, 157, 158, 159,
+                208, 212, 216, 220, 212, 213, 217, 221, 216, 217, 218, 222, 220, 221, 222, 223,
+                128, 132, 136, 140, 132, 133, 137, 141, 136, 137, 138, 142, 140, 141, 142, 143,
+                144, 148, 152, 156, 148, 149, 153, 157, 152, 153, 154, 158, 156, 157, 158, 159,
+                160, 164, 168, 172, 164, 165, 169, 173, 168, 169, 170, 174, 172, 173, 174, 175,
+                224, 228, 232, 236, 228, 229, 233, 237, 232, 233, 234, 238, 236, 237, 238, 239,
+                192, 196, 200, 204, 196, 197, 201, 205, 200, 201, 202, 206, 204, 205, 206, 207,
+                208, 212, 216, 220, 212, 213, 217, 221, 216, 217, 218, 222, 220, 221, 222, 223,
+                224, 228, 232, 236, 228, 229, 233, 237, 232, 233, 234, 238, 236, 237, 238, 239,
+                240, 244, 248, 252, 244, 245, 249, 253, 248, 249, 250, 254, 252, 253, 254, 255
+            };
+
+            string userHomePath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string gtaSanAndreasUserFiles = Path.Combine(userHomePath, "GTA San Andreas User Files");
+
+            byte[] hash = new SHA1Managed().ComputeHash(Encoding.UTF8.GetBytes(gtaSanAndreasUserFiles[4..]));
+            byte[] swappedHash = Enumerable.Range(0, hash.Length / 4).SelectMany(i => hash.Skip(i * 4).Take(4).Reverse()).ToArray();
+            byte[] byteArray = swappedHash.Select(b => GPCI_SBOX[b]).ToArray();
+
+            return BitConverter.ToString(byteArray).Replace("-", "").TrimStart('0').ToUpper();
+        }
+
         private static string GetHWID() {
             var processorId = "";
 
@@ -200,14 +254,12 @@ namespace NostalgiaAnticheat {
             ManagementObject dsk = new(@"win32_logicaldisk.deviceid=""c:""");
             dsk.Get();
 
-            using (SHA256 sha256Hash = SHA256.Create()) {
-                byte[] bytes = sha256Hash.ComputeHash(Encoding.UTF8.GetBytes(processorId + dsk["VolumeSerialNumber"]));
-                StringBuilder builder = new();
+            byte[] bytes = SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(processorId + dsk["VolumeSerialNumber"]));
+            StringBuilder builder = new();
 
-                for (var i = 0; i < bytes.Length; i++) builder.Append(bytes[i].ToString("x2"));
+            for (var i = 0; i < bytes.Length; i++) builder.Append(bytes[i].ToString("x2"));
 
-                return builder.ToString();
-            }
+            return builder.ToString();
         }
     }
 }
