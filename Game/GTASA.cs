@@ -45,7 +45,7 @@ namespace NostalgiaAnticheat.Game {
         public static bool SetInstallationPath(string installationPath) {
             if (!IsInstallationPathValid(installationPath)) return false;
 
-            InstallationPath = installationPath;
+            InstallationPath = Path.GetDirectoryName(installationPath);
 
             StartMonitoring();
 

@@ -86,7 +86,7 @@ namespace NostalgiaAnticheat {
 
             GTASA.SetInstallationPath(SAMP.GetGamePath());
 
-            _ = Menu.Show();
+            await Menu.Show();
         }
     }
 }

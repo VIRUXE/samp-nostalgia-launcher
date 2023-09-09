@@ -50,10 +50,12 @@ namespace NostalgiaAnticheat {
             new MenuOption(("Deslogar", "Logout"),
                 () => Player.LoggedIn,
                 async () => {
-                    if (await Player.Logout())
+                    try {
+                    if (await Player.Logout()) {
                         Program.DisplayMessage("Deslogado com Sucesso", "Logged out.", ConsoleColor.Green, true, true);
-                    else
+                    } else
                         Program.DisplayMessage("Ocorreu um erro ao deslogar.", "An error ocurred while logging out.", ConsoleColor.Red, true, true);
+                    } catch (Exception e) { Console.WriteLine(e); }
                 }   
             ),
             new MenuOption(("Jogar", "Play"),
@@ -126,41 +128,51 @@ namespace NostalgiaAnticheat {
         }
 
         public static async Task Show() {
-            
-
-            Console.WriteLine(Program.SystemLanguage == Language.PT ? "\nPressione a tecla correspondente a opção desejada..." : "\nPress the key corresponding to your option...");
-
             Dictionary<char, Func<Task>> availableOptions = new();
 
-            var optionIndex = 1;
-            foreach (MenuOption option in menuOptions) {
-                if(!option.Condition()) continue;
+            void DisplayMenu() {
+                availableOptions.Clear();
 
-                availableOptions.Add(optionIndex.ToString()[0], option.Function);
+                Console.WriteLine(Program.SystemLanguage == Language.PT ? "\nPressione a tecla correspondente a opção desejada..." : "\nPress the key corresponding to your option...");
 
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.Write($"{optionIndex}. ");
-                Console.ResetColor();
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? option.Name.PT : option.Name.EN);
+                var optionIndex = 1;
+                foreach (MenuOption option in menuOptions) {
+                    if (!option.Condition()) continue;
 
-                optionIndex++;
+                    availableOptions.Add(optionIndex.ToString()[0], option.Function);
+
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.Write($"{optionIndex}. ");
+                    Console.ResetColor();
+                    Console.WriteLine(Program.SystemLanguage == Language.PT ? option.Name.PT : option.Name.EN);
+
+                    optionIndex++;
+                }
+
+                Console.WriteLine("Q. Quit\n");
             }
 
-            Console.WriteLine("Q. Quit\n");
+            DisplayMenu();
 
             while (true) {
                 ConsoleKeyInfo key = Console.ReadKey(true);
 
                 if (key.KeyChar == 'q' || key.KeyChar == 'Q') {
                     _ = Player.Logout(); // No need to wait since we are exiting
-
                     Environment.Exit(0);
-                } else if (availableOptions.ContainsKey(key.KeyChar))
-                    await availableOptions[key.KeyChar]();
-                else
+                } else if (availableOptions.ContainsKey(key.KeyChar)) {
+                    try {
+                        var task = availableOptions[key.KeyChar]();
+                        await task;
+                        Console.WriteLine("Task Status: " + task.Status);
+
+                        DisplayMenu();
+                    } catch (Exception ex) {
+                        Console.WriteLine("An error occurred: " + ex.Message);
+                    }
+                } else {
                     Program.DisplayMessage("Opção inválida. Tente novamente.", "Invalid option. Try again.", ConsoleColor.Red);
-
-
+                }
             }
         }
     }

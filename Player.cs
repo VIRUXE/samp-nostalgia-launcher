@@ -51,8 +51,6 @@ namespace NostalgiaAnticheat {
             _hwid = GetHWID();
 
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("NostalgiaLauncher");
-
-            Debug.WriteLine(_gpci);
         }
 
         private static async void OnPingEvent(object state) {
@@ -108,6 +106,7 @@ namespace NostalgiaAnticheat {
                     nickname,
                     password,
                     serial = _hwid,
+                    gpci = _gpci,
                     version = Assembly.GetExecutingAssembly().GetName().Version.ToString(),
                     timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                 }), Encoding.UTF8, "application/json"));
@@ -175,7 +174,8 @@ namespace NostalgiaAnticheat {
 
                 _httpClient.DefaultRequestHeaders.Authorization = null;
 
-                if (response.IsSuccessStatusCode) return true;
+                if (response.IsSuccessStatusCode) 
+                    return true;
             } catch { }
 
             return false;
