@@ -12,8 +12,8 @@ using Microsoft.Win32;
 
 namespace NostalgiaAnticheat.Game {
     public static class Gameserver {
+        public static Network.State LastState { get; private set; } = Network.State.None;
         public static Network.State State { get; private set; } = Network.State.None;
-        public static ManualResetEventSlim StateUpdated { get; } = new ManualResetEventSlim(false);
 
         public static event Action ServerOnline;
         public static event Action ServerOffline;
@@ -21,12 +21,10 @@ namespace NostalgiaAnticheat.Game {
         public static bool IsOnline => State == Network.State.Online;
 
         public static async Task Monitor() {
-            Network.State previousState = State;
-
             while (true) {
                 State = await SAMP.GetServerState("sv.scavengenostalgia.fun", 7777);
 
-                if (previousState != State && previousState != Network.State.None) {
+                if (LastState != State && LastState != Network.State.None) {
                     if (State == Network.State.Online) {
                         ServerOnline?.Invoke();
                     } else if (State == Network.State.Offline) {
@@ -34,96 +32,98 @@ namespace NostalgiaAnticheat.Game {
                     }
                 }
 
-                previousState = State;
-
-                StateUpdated.Set();
+                LastState = State;
 
                 await Task.Delay(TimeSpan.FromSeconds(5));
-
-                StateUpdated.Reset();
             }
         }
     }
 
-
     internal class SAMP {
-
-        public static string GetGamePath() => Registry.GetValue(@"HKEY_CURRENT_USER\Software\SAMP", "gta_sa_exe", null) as string;
-
-        public static string GetPlayerNickname() => Registry.GetValue(@"HKEY_CURRENT_USER\Software\SAMP", "PlayerName", null) as string;
-
-        public static void SetPlayerNickname(string nickname) => Registry.SetValue(@"HKEY_CURRENT_USER\Software\SAMP", "PlayerName", nickname);
-
-        public static string GetVersion() {
-            string dllPath = Path.Combine(Path.GetDirectoryName(GetGamePath()), "samp.dll");
-
-            if (File.Exists(dllPath)) {
-                FileVersionInfo fileVersionInfo = FileVersionInfo.GetVersionInfo(dllPath);
-                return fileVersionInfo.ProductPrivatePart.ToString();
+        public static string GamePath {
+            get {
+                string path = Registry.GetValue(@"HKEY_CURRENT_USER\Software\SAMP", "gta_sa_exe", null) as string;
+                return path?.Replace("\\gta_sa.exe", "");
             }
-
-            return null;
+            set {
+                string newValue = Path.Combine(value, "gta_sa.exe");
+                Registry.SetValue(@"HKEY_CURRENT_USER\Software\SAMP", "gta_sa_exe", newValue);
+            }
         }
 
-        public static async Task<bool> Download(string installPath) {
-            string downloadFilePath = Path.Combine(installPath, "sa-mp-0.3.7-R5-1-install.exe");
 
-            if (File.Exists(downloadFilePath)) {
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? "O arquivo já existe, não é necessário baixar." : "File already exists, no need to download.");
-                return false;
+        public static string PlayerName {
+            get => Registry.GetValue(@"HKEY_CURRENT_USER\Software\SAMP", "PlayerName", null) as string;
+            set => Registry.SetValue(@"HKEY_CURRENT_USER\Software\SAMP", "PlayerName", value);
+        }
+
+        public static bool IsInstalled {
+            get {
+                if (GamePath == null) return false;
+
+                return new[] { "samp.exe", "samp.dll" }.All(file => File.Exists(Path.Combine(GamePath, file)));
             }
+        }
 
-            using (HttpClient client = new()) {
-                using (HttpResponseMessage response = await client.GetAsync("http://www.scavengenostalgia.fun/baixar/sa-mp-0.3.7-R5-1-install.exe", HttpCompletionOption.ResponseHeadersRead)) {
-                    response.EnsureSuccessStatusCode();
+        public static string Version {
+            get {
+                var dllPath = Path.Combine(GamePath, "samp.dll");
 
-                    long contentLength = response.Content.Headers.ContentLength.GetValueOrDefault(0);
-                    if (contentLength == 0) throw new Exception("The content length could not be determined.");
+                if (File.Exists(dllPath)) return FileVersionInfo.GetVersionInfo(dllPath).FileVersion?.Replace(", ", ".");
 
-                    using (Stream contentStream = await response.Content.ReadAsStreamAsync(), fileStream = new FileStream(downloadFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true)) {
-                        var totalRead = 0L;
-                        var buffer = new byte[8192];
-                        var isMoreToRead = true;
+                return null;
+            }
+        }
 
-                        do {
-                            int read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
-                            if (read == 0)
-                                isMoreToRead = false;
-                            else {
-                                await fileStream.WriteAsync(buffer, 0, read);
+        public static void AskForInstallationPath() {
+            while (true) {
+                StringBuilder inputBuilder = new();
+                int currentPosition = 0;
 
-                                totalRead += read;
-                                ProgressBar.Display(totalRead, contentLength);
-                            }
-                        } while (isMoreToRead);
+                Console.WriteLine("Please enter the installation path (Press ESC to cancel): ");
+
+                while (true) {
+                    ConsoleKeyInfo keyInfo = Console.ReadKey(intercept: true);
+
+                    if (keyInfo.Key == ConsoleKey.Enter) {
+                        break;
+                    } else if (keyInfo.Key == ConsoleKey.Escape) {
+                        return;
+                    } else if (keyInfo.Key == ConsoleKey.Backspace) {
+                        if (currentPosition > 0) {
+                            inputBuilder.Remove(currentPosition - 1, 1);
+                            Console.Write("\b \b");  // Handle backspace visually
+                            currentPosition--;
+                        }
+                    } else if (keyInfo.Key == ConsoleKey.Home) {
+                        Console.CursorLeft = 0;
+                        currentPosition = 0;
+                    } else {
+                        inputBuilder.Insert(currentPosition, keyInfo.KeyChar);
+                        Console.Write(keyInfo.KeyChar);  // Echo character to console
+                        currentPosition++;
                     }
-
-                    return true;
                 }
-            }
-        }
 
-        public static async Task<bool> Install(string installPath) {
-            string installerPath = Path.Combine(installPath, "sa-mp-0.3.7-R5-1-install.exe");
+                Console.WriteLine();  // Move to the next line after Enter is pressed
 
-            if (!File.Exists(installerPath)) {
-                Console.WriteLine("Installer not found at specified path.");
-                return false;
-            }
+                string installationPath = inputBuilder.ToString();
 
-            ProcessStartInfo startInfo = new() {
-                FileName = installerPath,
-                Arguments = "/S",
-                UseShellExecute = false
-            };
+                if (string.IsNullOrEmpty(installationPath)) {
+                    Console.WriteLine("Path cannot be empty. Please try again.");
+                    continue;
+                }
 
-            try {
-                Process proc = Process.Start(startInfo);
-                await proc.WaitForExitAsync();
-                return proc.ExitCode == 0; // NSIS installers generally return 0 on successful install
-            } catch (Exception e) {
-                Console.WriteLine($"Installation failed: {e.Message}");
-                return false;
+                if (GTASA.IsInstallationPathValid(installationPath)) {
+                    Console.WriteLine($"Installation Path changed to: {installationPath}");
+                    GamePath = installationPath;
+
+                    Settings.AddInstallationPath(GamePath);
+
+                    break;
+                } else {
+                    Console.WriteLine("Invalid path. Please try again.");
+                }
             }
         }
 
