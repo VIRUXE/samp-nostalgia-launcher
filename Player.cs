@@ -48,7 +48,7 @@ namespace NostalgiaAnticheat {
 
         static Player() {
             _gpci = gpci();
-            _hwid = GetHWID();
+            _hwid = OS.GenerateHWID();
 
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("NostalgiaLauncher");
         }
@@ -59,18 +59,16 @@ namespace NostalgiaAnticheat {
             try {
                 var response = await _httpClient.PostAsJsonAsync(API_ADDR + "/player/ping", new PingData(OS.GetOpenWindows(), new List<string> { }));
 
-                if (response.IsSuccessStatusCode) { // Meaning the data we sent is good
-                    // Now we check if there is content to download
-                    var responseContent = await response.Content.ReadAsStringAsync();
+                var responseContent = await response.Content.ReadAsStringAsync();
 
-                    if (!string.IsNullOrEmpty(responseContent)) { 
-                        var parsedResponse = JsonSerializer.Deserialize<PingResponse>(responseContent);
+                if (response.IsSuccessStatusCode) {
+                    if (!string.IsNullOrEmpty(responseContent)) {
+                        var jsonResponse = JsonSerializer.Deserialize<PingResponse>(responseContent);
 
-                        if (parsedResponse.Message != null) 
-                            await Logout(parsedResponse.Message); // API doesn't like you
+                        if (jsonResponse.Message != null)
+                            await Logout(jsonResponse.Message);
                         else {
-                            // We're good so let's complete Actions if we have any
-                            foreach (var action in parsedResponse.Actions) {
+                            foreach (var action in jsonResponse.Actions) {
                                 switch (action.Type) {
                                     case ResponseType.Screenshot:
                                         // Handle ActionType1 targeting action.Target
@@ -80,14 +78,17 @@ namespace NostalgiaAnticheat {
                             }
                         }
                     }
-                } else if (response.StatusCode == HttpStatusCode.BadRequest) {
-                    await Logout("[HEARTBEAT] Naughty naughty...");
-                } else if (response.StatusCode == HttpStatusCode.Unauthorized) {
-                    Console.WriteLine("[HEARTBEAT] Unauthorized. Ensure correct authentication.");
-                } else if (response.StatusCode == HttpStatusCode.InternalServerError) {
-                    Console.WriteLine("[HEARTBEAT] Internal server error. Check server logs.");
                 } else {
-                    Console.WriteLine($"[HEARTBEAT] HTTP Error: {response.StatusCode}");
+                    string errorMessage = $"[HEARTBEAT] HTTP Error: {response.StatusCode}";
+
+                    try {
+                        var jsonResponse = JsonSerializer.Deserialize<dynamic>(responseContent);
+
+                        if (jsonResponse?.error != null) errorMessage += $", Error: {jsonResponse.error}";
+                    } catch (JsonException) {
+                        // The response was not JSON, no additional error message to add
+                    }
+                    Console.WriteLine(errorMessage);
                 }
             } catch (HttpRequestException e) {
                 Console.WriteLine($"[HEARTBEAT] HTTP Request Error: {e.Message}");
@@ -120,6 +121,8 @@ namespace NostalgiaAnticheat {
                         Nickname = nickname; // ? It may be different for some reason?
 
                         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resultData["token"]);
+
+                        resultData.Remove("token");
 
                         // Start the /ping timer
                         _pinger?.Dispose();
@@ -165,6 +168,8 @@ namespace NostalgiaAnticheat {
         public static async Task<bool> Logout(string message = null) {
             if (!LoggedIn) return false;
 
+            _pinger?.Dispose();
+
             Nickname = null;
 
             if (!string.IsNullOrEmpty(message)) Console.WriteLine($"Logout Message: {message}");
@@ -174,41 +179,30 @@ namespace NostalgiaAnticheat {
 
                 _httpClient.DefaultRequestHeaders.Authorization = null;
 
-                if (response.IsSuccessStatusCode) 
-                    return true;
+                if (response.IsSuccessStatusCode) return true;
             } catch { }
 
             return false;
         }
 
-        public static async Task<bool> IsHwBanned() {
+        public static async Task<bool?> IsHwBanned() {
             try {
-                using (HttpClient client = new()) {
-                    HttpResponseMessage response = await client.GetAsync(API_ADDR + $"/hwid/{_hwid}");
+                HttpResponseMessage response = await _httpClient.GetAsync(API_ADDR + $"/hwid/{_hwid}");
 
-                    if (response.StatusCode == HttpStatusCode.Forbidden) {
-                        string result = await response.Content.ReadAsStringAsync();
+                if (response.StatusCode == HttpStatusCode.Forbidden) {
+                    string result = await response.Content.ReadAsStringAsync();
 
-                        var banData = JsonSerializer.Deserialize<Dictionary<string, string>>(result);
+                    var banData = JsonSerializer.Deserialize<Dictionary<string, string>>(result);
 
-                        foreach (var item in banData) Console.WriteLine(item);
+                    foreach (var item in banData) Console.WriteLine(item);
 
-                        return true;
-                    } else if (response.StatusCode == HttpStatusCode.NotFound) {
-                        return false;
-                    } else if (response.StatusCode == HttpStatusCode.BadRequest) {
-                        Console.WriteLine("Bad request. HWID parameter is not provided.");
-                        return true;
-                    } else {
-                        Console.WriteLine($"HTTP Error: {response.StatusCode}");
-                        return true;
-                    }
+                    return true;
+                } else if (response.StatusCode == HttpStatusCode.NotFound) {
+                    return false;
                 }
-            } catch (Exception ex) {
-                Console.WriteLine($"An error occurred: {ex.Message}");
-            }
+            } catch { }
 
-            return true;
+            return null;
         }
 
         private static string gpci() {
@@ -239,27 +233,6 @@ namespace NostalgiaAnticheat {
             byte[] byteArray = swappedHash.Select(b => GPCI_SBOX[b]).ToArray();
 
             return BitConverter.ToString(byteArray).Replace("-", "").TrimStart('0').ToUpper();
-        }
-
-        private static string GetHWID() {
-            var processorId = "";
-
-            // Get processor ID
-            foreach (ManagementObject mo in new ManagementObjectSearcher("Select ProcessorId From Win32_processor").Get()) {
-                processorId = mo["ProcessorId"].ToString();
-                break;
-            }
-
-            // Get volume _hwid number
-            ManagementObject dsk = new(@"win32_logicaldisk.deviceid=""c:""");
-            dsk.Get();
-
-            byte[] bytes = SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(processorId + dsk["VolumeSerialNumber"]));
-            StringBuilder builder = new();
-
-            for (var i = 0; i < bytes.Length; i++) builder.Append(bytes[i].ToString("x2"));
-
-            return builder.ToString();
         }
     }
 }
