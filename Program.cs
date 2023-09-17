@@ -1,5 +1,6 @@
 ﻿using NostalgiaAnticheat.Game;
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Threading;
@@ -37,7 +38,17 @@ namespace NostalgiaAnticheat {
 
             GTASA.Playing = true;
 
-            DisplayMessage("Conexão ao servidor de jogo estabelecida.", "Connected to the game server.", ConsoleColor.Green, true, false);
+            DisplayMessage("Conexão ao servidor de jogo estabelecida.", "Connected to the game server.", ConsoleColor.Green, true, true);
+
+            Menu.DisplayOptions();
+        }
+
+        private static void LogWatcher_OnDisconnected(object sender, EventArgs e) {
+            GTASA.Playing = false;
+
+            DisplayMessage("Conexão com o servidor foi terminada.", "Connection to the game server was terminated.", ConsoleColor.Green, true, true);
+
+            Menu.DisplayOptions();
         }
 
         public static async Task Main() {
@@ -50,43 +61,92 @@ namespace NostalgiaAnticheat {
             DisplayMessage("Launcher do Scavenge Nostalgia", "Scavenge Nostalgia Launcher", ConsoleColor.White, false);
             Console.WriteLine($" - {Assembly.GetExecutingAssembly().GetName().Version}\n");
 
-            if (await Player.IsHwBanned()) {
+            TaskCompletionSource<object> tcs = new();
+
+            Gameserver.ServerOnline += () => {
+                DisplayMessage("Servidor ficou Online.", "Server is now Online.", ConsoleColor.Green, true, true);
+                tcs.TrySetResult(null);  // Set the task as complete when the server comes back online
+            };
+
+            Gameserver.ServerOffline += () => {
+                DisplayMessage("Servidor está Offline. Aguardando que volte...", "Server is Offline. Waiting for it to come back...", ConsoleColor.Red, true, true);
+            };
+
+            _ = Gameserver.Monitor(); // Start monitoring our gameserver
+
+            while(Gameserver.LastState == Network.State.None) { // This is the first state check
+                if(Gameserver.State == Network.State.Offline) {
+                    DisplayMessage("O Servidor de Jogo está Offline. Vamos aguardar antes de continuar...", "The Game Server is Offline. Let's wait for it to come back...", ConsoleColor.Red, true, true);
+
+                    await tcs.Task;
+                }
+            }
+
+            // By now the API should be operational right?
+            /*bool? isBanned = await Player.IsHwBanned();
+
+            if (isBanned == true) {
                 DisplayMessage("Banido.", "Banned.", ConsoleColor.Red, true, true);
                 Console.ReadKey();
                 Environment.Exit(0);
-            }
+            } else if (isBanned == null) {
+                DisplayMessage("Não foi possível verificar contactar o servidor.", "Could not establish a connection with the server.", ConsoleColor.Yellow, false, true);
+                Console.ReadKey();
+                Environment.Exit(0);
+            }*/
 
             // Logout Player on app exit
             AppDomain.CurrentDomain.ProcessExit += async (s, e) => await Player.Logout();
 
-            LogWatcher.OnConnected += LogWatcher_OnConnected;
+            // Now before any actual good stuff we make sure we have GTASA and SAMP installed
+            if(!GTASA.IsInstalled) {
+                Console.WriteLine("Não tem GTA San Andreas instalado. Impossível continuar.");
 
-            _ = Gameserver.Monitor(); // Start monitoring our gameserver
+                Console.ReadKey();
+                Environment.Exit(0);
+            } else { // Is installed
+                if(!SAMP.IsInstalled) {
+                    Console.WriteLine("Não tem SA-MP instalado. Impossível continuar.");
 
-            // but why
-            while (Gameserver.State == Network.State.Offline) {
-                DisplayMessage("Servidor Offline. Aguardando...", "Server Offline. Waiting...", ConsoleColor.Red, true, true);
+                    Console.ReadKey();
+                    Environment.Exit(0);
+                } else {
+                    /*if(SAMP.Version != "0.3.7.5") {
+                        Console.WriteLine("O seu SA-MP tem que ser a versão 0.3.7 R5. Impossível continuar.");
 
-                Gameserver.StateUpdated.Wait();
+                        Console.ReadKey();
+                        Environment.Exit(0);
+                    }*/
+                }
             }
 
-            Gameserver.ServerOnline += () => {
-                DisplayMessage("Servidor voltou.", "Server is now back Online.", ConsoleColor.Green, true, true);
+            LogWatcher.OnConnected += LogWatcher_OnConnected;
+
+            GTASA.GameStarted += () => {
+                DisplayMessage("Jogo Iniciado.", "Game Started.", ConsoleColor.Green, true, true);
+
+                Menu.DisplayOptions();
             };
 
-            Gameserver.ServerOffline += () => {
-                DisplayMessage("Servidor caiu. Aguardando que volte...", "Server went Offline. Waiting to come back...", ConsoleColor.Green, true, true);
+            GTASA.GameExited += () => {
+                DisplayMessage("Jogo Terminado.", "Game Terminated.", ConsoleColor.Yellow, true, true);
+
+                Menu.DisplayOptions();
             };
 
             LogWatcher.Start();
 
-            Console.WriteLine($"Nickname: {SAMP.GetPlayerNickname()}");
+            Console.WriteLine($"Nickname: {SAMP.PlayerName}");
+            Console.WriteLine($"Caminho do Jogo: {SAMP.GamePath}");
+            Console.WriteLine($"SA-MP: {SAMP.Version}");
 
-            await Player.Login("VIRUXE", "conacona");
+            //await Player.Login("VIRUXE", "conacona");
 
-            GTASA.SetInstallationPath(SAMP.GetGamePath());
+            GTASA.SetInstallationPath(SAMP.GamePath);
 
-            await Menu.Show();
+            GTASA.StartMonitoring();
+
+            await Menu.Init();
         }
     }
 }
