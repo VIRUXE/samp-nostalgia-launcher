@@ -1,6 +1,8 @@
 ﻿using NostalgiaAnticheat.Game;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace NostalgiaAnticheat {
@@ -16,12 +18,12 @@ namespace NostalgiaAnticheat {
                         "To log in, you will need to provide your server nickname and password.\nEnter your nickname (or leave blank to use the one you have in SA-MP):"
                         , ConsoleColor.Cyan);
 
-                    string sampNickname = SAMP.GetPlayerNickname();
+                    string sampNickname = SAMP.PlayerName;
                     string inputNickname = Console.ReadLine()?.Trim();
                     string nickname;
 
                     if (!string.IsNullOrEmpty(inputNickname) && inputNickname != sampNickname) {
-                        SAMP.SetPlayerNickname(inputNickname);
+                        SAMP.PlayerName = inputNickname;
                         nickname = inputNickname;
                     } else
                         nickname = sampNickname;
@@ -56,24 +58,72 @@ namespace NostalgiaAnticheat {
                     } else
                         Program.DisplayMessage("Ocorreu um erro ao deslogar.", "An error ocurred while logging out.", ConsoleColor.Red, true, true);
                     } catch (Exception e) { Console.WriteLine(e); }
-                }   
+                }
             ),
             new MenuOption(("Jogar", "Play"),
                 () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsInstallationValid,
                 () => {
-                    if (GTASA.Launch())
-                        Program.DisplayMessage("Jogo Iniciado. Esperando conexão... ", "GTASA Started. Waiting for connection... ", ConsoleColor.White, false, true);
-                    else
-                        Program.DisplayMessage("O jogo já se encontra iniciado. Focando na tela.", "The GTASA is already running. Showing window.", ConsoleColor.Yellow, true, true);
+                    var verificationResult = GTASA.Verify();
+
+                    if(verificationResult) {
+                        if(GTASA.Launch())
+                            Program.DisplayMessage("Jogo Iniciado. Esperando conexão... ", "GTASA Started. Waiting for connection... ", ConsoleColor.White, false, true);
+                        else
+                            Program.DisplayMessage("O jogo já se encontra iniciado. Focando na tela.", "The GTASA is already running. Showing window.", ConsoleColor.Yellow, true, true);
+                    } else {
+                        Debug.WriteLine("verify");
+                    }
 
                     return Task.CompletedTask;
                 }
             ),
-            new MenuOption(("Verificar Arquivos do Jogo", "Verify Game Files"),
-                () => Player.LoggedIn && !GTASA.IsRunning,
+            new MenuOption(("Mudar Pasta do Jogo", "Change Game Path"),
+                () => !GTASA.IsRunning,
                 () => {
-                    //GTASA.Verify();
-                    Console.WriteLine("Verifying files...");
+                    while (true) {
+                        List<string> paths = new(Settings.InstallationPaths);
+
+                        if (!paths.Contains(SAMP.GamePath)) paths.Insert(0, SAMP.GamePath);
+
+                        Console.WriteLine("Available installation paths:");
+                        for (int i = 0; i < paths.Count; i++) Console.WriteLine($"{i + 1}. {paths[i]}");
+
+                        Console.WriteLine($"{paths.Count + 1}. Select a new installation path");
+
+                        int choice;
+                        while (true) {
+                            Console.Write("Choose an option: ");
+
+                            var keyInfo = Console.ReadKey();
+                            Console.WriteLine();  // Move to next line as ReadKey doesn't do this automatically
+                            if (int.TryParse(keyInfo.KeyChar.ToString(), out choice) && choice >= 1 && choice <= paths.Count + 1)
+                                break;
+                            else
+                                Console.WriteLine("Invalid choice, please try again.");
+                        }
+
+                        if (choice == paths.Count + 1) {
+                            SAMP.AskForInstallationPath();
+                            break;
+                        } else {
+                            var path = paths[choice - 1];
+
+                            if (GTASA.IsInstallationPathValid(path)) {
+                                if (SAMP.GamePath == path) {
+                                    Console.WriteLine("You have selected the current installation path.");
+                                } else {
+                                    SAMP.GamePath = path;
+                                    Console.WriteLine($"Game path changed to: {path}");
+                                }
+
+                                break;
+                            } else {
+                                Settings.InstallationPaths.Remove(path);
+                                Settings.Save();
+                                Console.WriteLine($"The path {path} is invalid and has been removed from the list. Relisting available paths...");
+                            }
+                        }
+                    }
 
                     return Task.CompletedTask;
                 }
@@ -103,6 +153,7 @@ namespace NostalgiaAnticheat {
                 }
             )
         };
+        private static readonly Dictionary<char, Func<Task>> availableOptions = new();
 
         private static string ReadPassword() {
             var password = "";
@@ -127,48 +178,49 @@ namespace NostalgiaAnticheat {
             return password;
         }
 
-        public static async Task Show() {
-            Dictionary<char, Func<Task>> availableOptions = new();
+        public static void DisplayOptions() {
+            availableOptions.Clear();
 
-            void DisplayMenu() {
-                availableOptions.Clear();
+            Console.WriteLine(Program.SystemLanguage == Language.PT ? "\nPressione a tecla correspondente a opção desejada..." : "\nPress the key corresponding to your option...");
 
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? "\nPressione a tecla correspondente a opção desejada..." : "\nPress the key corresponding to your option...");
+            var optionIndex = 1;
+            foreach (MenuOption option in menuOptions) {
+                if (!option.Condition()) continue;
 
-                var optionIndex = 1;
-                foreach (MenuOption option in menuOptions) {
-                    if (!option.Condition()) continue;
+                availableOptions.Add(optionIndex.ToString()[0], option.Function);
 
-                    availableOptions.Add(optionIndex.ToString()[0], option.Function);
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.Write($"{optionIndex}. ");
+                Console.ResetColor();
+                Console.WriteLine(Program.SystemLanguage == Language.PT ? option.Name.PT : option.Name.EN);
 
-                    Console.ForegroundColor = ConsoleColor.DarkYellow;
-                    Console.Write($"{optionIndex}. ");
-                    Console.ResetColor();
-                    Console.WriteLine(Program.SystemLanguage == Language.PT ? option.Name.PT : option.Name.EN);
-
-                    optionIndex++;
-                }
-
-                Console.WriteLine("Q. Quit\n");
+                optionIndex++;
             }
 
-            DisplayMenu();
+            Console.WriteLine("Q. Quit\n");
+        }
+
+        public static async Task Init() {
+            DisplayOptions();
 
             while (true) {
+                bool condition = Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsInstallationValid;
+                Debug.WriteLine($"Player Logged In: {Player.LoggedIn}, GTASA Running: {!GTASA.IsRunning}, Gameserver Online: {Gameserver.IsOnline}, GTASA Installation Valid: {GTASA.IsInstallationValid}, Condition Result: {condition}");
+
                 ConsoleKeyInfo key = Console.ReadKey(true);
 
                 if (key.KeyChar == 'q' || key.KeyChar == 'Q') {
-                    _ = Player.Logout(); // No need to wait since we are exiting
+                    await Player.Logout(); // No need to wait since we are exiting
+
                     Environment.Exit(0);
                 } else if (availableOptions.ContainsKey(key.KeyChar)) {
                     try {
-                        var task = availableOptions[key.KeyChar]();
-                        await task;
-                        Console.WriteLine("Task Status: " + task.Status);
+                        await availableOptions[key.KeyChar]();
 
-                        DisplayMenu();
+                        DisplayOptions();
                     } catch (Exception ex) {
-                        Console.WriteLine("An error occurred: " + ex.Message);
+                        Console.WriteLine("Error: " + ex.Message);
+                        DisplayOptions();
                     }
                 } else {
                     Program.DisplayMessage("Opção inválida. Tente novamente.", "Invalid option. Try again.", ConsoleColor.Red);
