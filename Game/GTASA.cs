@@ -8,49 +8,49 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 
 namespace NostalgiaAnticheat.Game {
     internal class GTASA {
         public const string EXECUTABLE_NAME = "gta_sa.exe";
         public const int MIN_GAME_FILES = 100;
 
-        public static string InstallationPath {get; private set;}
         public static Process Process;
-
+        public static bool Monitoring;
         public static event Action GameStarted;
         public static event Action GameExited;
 
+        public static string InstallationPath {get; private set;}
+        public static bool IsInstalled => GetInstallPath() != null;
         public static string ExecutablePath => IsInstallationValid ? Path.Combine(InstallationPath, EXECUTABLE_NAME) : null;
-
         public static bool IsInstallationPathValid(string installationPath) {
-            var path = Path.GetDirectoryName(installationPath);
+            string path = installationPath.Contains(EXECUTABLE_NAME) ? Path.GetDirectoryName(installationPath) : installationPath;
 
-            // Check if the path provided actually exists
             if (!Directory.Exists(path)) return false;
 
-            // If the executable is valid (also checks if it's present)
             if (!IsExecutableValid(Path.Combine(path, EXECUTABLE_NAME))) return false;
 
-            // Ensure there are enough files for a proper game installation
             if (Directory.GetFiles(path, "*", SearchOption.AllDirectories).Length < MIN_GAME_FILES) return false;
 
             return true;
         }
-
-        // Make sure our installation is valid
         public static bool IsInstallationValid => !string.IsNullOrEmpty(InstallationPath) && IsInstallationPathValid(InstallationPath);
 
         public static bool SetInstallationPath(string installationPath) {
-            if (!IsInstallationPathValid(installationPath)) return false;
+            string path = installationPath;
 
-            InstallationPath = Path.GetDirectoryName(installationPath);
+            if (Path.HasExtension(installationPath)) path = Path.GetDirectoryName(installationPath);
 
-            StartMonitoring();
+            if (!IsInstallationPathValid(path)) return false;
+
+            InstallationPath = path;
 
             return true;
         }
+
 
         // Get all the files in the installation directory
         public static string[] GetFiles => IsInstallationValid ? Directory.GetFiles(InstallationPath, "*", SearchOption.AllDirectories) : null;
@@ -73,16 +73,7 @@ namespace NostalgiaAnticheat.Game {
             }
         }
 
-        public static string GetInstallPath() {
-            try {
-                var path = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string;
-
-                return path?.Replace("\"", "");
-            } catch { }
-
-            return null;
-        }
-
+        public static string GetInstallPath() => (Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string)?.Replace("\"", "");
         public static async Task<string> Download() {
             string directoryPath;
             var isDirectoryConfirmed = false;
@@ -217,15 +208,12 @@ namespace NostalgiaAnticheat.Game {
                 "8C609F108AD737DEFFBD0D17C702F5974D290C4379DE742277B809F80350DA1C",
                 "A559AA772FD136379155EFA71F00C47AAD34BBFEAE6196B0FE1047D0645CBD26",
                 "403EB9EC0BE348615697363033C1166BBA8220A720D71A87576A6B2737A9B765",
-                "f01a00ce950fa40ca1ed59df0e789848c6edcf6405456274965885d0929343ac"
+                "f01a00ce950fa40ca1ed59df0e789848c6edcf6405456274965885d0929343ac" // Mosby
             };
-
-            // Compute the hash of the executable
-            byte[] hash = SHA256.Create().ComputeHash(File.OpenRead(executablePath));
 
             // Convert the byte array to hexadecimal string
             StringBuilder sb = new();
-            foreach (var byteValue in hash) sb.Append(byteValue.ToString("X2"));
+            foreach (var byteValue in SHA256.Create().ComputeHash(File.OpenRead(executablePath))) sb.Append(byteValue.ToString("X2"));
 
             return validHashes.Contains(sb.ToString(), StringComparer.OrdinalIgnoreCase);
         }
@@ -248,14 +236,20 @@ namespace NostalgiaAnticheat.Game {
         /// <summary>
         /// Starts monitoring for the GTA SA processes. Kills any non-legitimate instances of the game and raises events when the game starts or exits.
         /// </summary>
-        private static async void StartMonitoring() {
+        public static async void StartMonitoring() {
+            if(Monitoring) return;
+
+            Monitoring = true;
+
             await Task.Run(() => {
                 while (true) {
+                    if (ExecutablePath == null) continue;
+
                     // Get a list of all currently running GTA processes
                     // Loop through each GTA process found
                     foreach (var process in GetAllGTAProcesses()) {
                         // If the process path doesn't match our installation path, it's not a legitimate process and we should kill it
-                        if (process.MainModule.FileName != InstallationPath) { 
+                        if (process.MainModule.FileName != ExecutablePath) { 
                             process.Kill();
                             continue;
                         }
@@ -272,19 +266,14 @@ namespace NostalgiaAnticheat.Game {
 
                     // If we're tracking a process but it has exited, raise the GameExited event and reset the tracked process
                     if (IsRunning && Process.HasExited) {
-                        GameExited?.Invoke();
                         Process = null;
+                        GameExited?.Invoke();
                     }
 
                     // Pause the loop for 1 second before checking again
                     Thread.Sleep(1000);
                 }
             });
-        }
-
-        private static string gpci() {
-
-            return string.Empty;
         }
 
         [DllImport("User32.dll")]
@@ -298,5 +287,9 @@ namespace NostalgiaAnticheat.Game {
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        internal static bool Verify() {
+            throw new NotImplementedException();
+        }
     }
 }
