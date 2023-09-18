@@ -142,6 +142,10 @@ namespace NostalgiaAnticheat {
 
             //await Player.Login("VIRUXE", "conacona");
 
+            await GTASA.FetchManifest();
+
+            Debug.WriteLine(GTASA.CountFilesInManifest());
+
             GTASA.SetInstallationPath(SAMP.GamePath);
 
             GTASA.StartMonitoring();

@@ -23,21 +23,38 @@ namespace NostalgiaAnticheat.Game {
         public static event Action GameStarted;
         public static event Action GameExited;
 
+        private static JsonDocument _gameManifest;
+
         public static string InstallationPath {get; private set;}
         public static bool IsInstalled => GetInstallPath() != null;
         public static string ExecutablePath => IsInstallationValid ? Path.Combine(InstallationPath, EXECUTABLE_NAME) : null;
+        public static bool IsInstallationValid => !string.IsNullOrEmpty(InstallationPath) && IsInstallationPathValid(InstallationPath);
+
+        public static async Task FetchManifest() {
+            try {
+                string json = await new HttpClient().GetStringAsync("https://api.scavengenostalgia.fun/game");
+                _gameManifest = JsonDocument.Parse(json);
+            } catch { return; }
+        }
+
         public static bool IsInstallationPathValid(string installationPath) {
-            string path = installationPath.Contains(EXECUTABLE_NAME) ? Path.GetDirectoryName(installationPath) : installationPath;
+            string path = !string.IsNullOrEmpty(Path.GetExtension(installationPath)) ? Path.GetDirectoryName(installationPath) : installationPath;
 
             if (!Directory.Exists(path)) return false;
 
             if (!IsExecutableValid(Path.Combine(path, EXECUTABLE_NAME))) return false;
 
-            if (Directory.GetFiles(path, "*", SearchOption.AllDirectories).Length < MIN_GAME_FILES) return false;
+            string[] installationFiles = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
+
+            if(installationFiles.Length < CountFilesInManifest()) return false;
+
+            if (!ValidateInstallationAgainstManifest(installationPath, out List<(string FilePath, string Issue)> badFiles)) {
+                Debug.WriteLine(string.Join("\n", badFiles.Select(bf => $"{bf.FilePath}: {bf.Issue}")));
+                return false;
+            }
 
             return true;
         }
-        public static bool IsInstallationValid => !string.IsNullOrEmpty(InstallationPath) && IsInstallationPathValid(InstallationPath);
 
         public static bool SetInstallationPath(string installationPath) {
             string path = installationPath;
@@ -50,7 +67,6 @@ namespace NostalgiaAnticheat.Game {
 
             return true;
         }
-
 
         // Get all the files in the installation directory
         public static string[] GetFiles => IsInstallationValid ? Directory.GetFiles(InstallationPath, "*", SearchOption.AllDirectories) : null;
@@ -276,6 +292,77 @@ namespace NostalgiaAnticheat.Game {
             });
         }
 
+
+        public static int CountFilesInManifest() {
+            static int CountFilesInNode(JsonElement node) {
+                int fileCount = 0;
+
+                foreach (var entry in node.EnumerateObject()) {
+                    if (entry.Name == "files" && entry.Value.ValueKind == JsonValueKind.Object) {
+                        fileCount += entry.Value.EnumerateObject().Count();
+                    } else if (entry.Value.ValueKind == JsonValueKind.Object) {
+                        fileCount += CountFilesInNode(entry.Value);
+                    }
+                }
+
+                return fileCount;
+            }
+
+            return CountFilesInNode(_gameManifest.RootElement);
+        }
+
+        public static bool ValidateInstallationAgainstManifest(string installationPath, out List<(string FilePath, string Issue)> badFiles) {
+            if (_gameManifest == null) throw new InvalidOperationException("Manifest has not been fetched.");
+
+            badFiles = new List<(string FilePath, string Issue)>();
+
+            static DateTime UnixTimeStampToDateTime(long unixTimeStamp) {
+                DateTime dateTimeValue = new(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
+                dateTimeValue = dateTimeValue.AddSeconds(unixTimeStamp).ToLocalTime();
+                return dateTimeValue;
+            }
+
+            static bool ValidateNode(JsonElement node, string currentPath, List<(string FilePath, string Issue)> badFilesList) {
+                foreach (var property in node.EnumerateObject()) {
+                    string newPath = property.Name.Equals("files", StringComparison.OrdinalIgnoreCase)
+                            ? currentPath
+                            : Path.Combine(currentPath, property.Name);
+
+                    if (property.Name.Equals("files", StringComparison.OrdinalIgnoreCase)) {
+                        foreach (var fileNode in property.Value.EnumerateObject()) {
+                            string fileName = fileNode.Name;
+                            JsonElement fileProperties = fileNode.Value;
+
+                            string filePath = Path.Combine(newPath, fileName);
+
+                            if (File.Exists(filePath)) {
+                                FileInfo fileInfo = new(filePath);
+                                long expectedSize = fileProperties.GetProperty("size").GetInt64();
+                                long expectedLastModified = fileProperties.GetProperty("last_modified").GetInt64();
+
+                                if (fileInfo.Length != expectedSize) badFilesList.Add((filePath, "File size mismatch"));
+
+                                if(fileInfo.LastWriteTime.ToLocalTime() != UnixTimeStampToDateTime(expectedLastModified)) badFilesList.Add((filePath, "Last modified time mismatch"));
+                            } else
+                                badFilesList.Add((filePath, "File does not exist"));
+                        }
+                    } else if (property.Value.ValueKind == JsonValueKind.Object) {
+                        ValidateNode(property.Value, newPath, badFilesList);
+                    }
+                }
+
+                return true;
+            }
+
+            try {
+                ValidateNode(_gameManifest.RootElement, installationPath, badFiles);
+                return badFiles.Count == 0;
+            } catch (Exception ex) {
+                Debug.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
         [DllImport("User32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
@@ -284,12 +371,5 @@ namespace NostalgiaAnticheat.Game {
 
         [DllImport("User32.dll")]
         private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-        internal static bool Verify() {
-            throw new NotImplementedException();
-        }
     }
 }
