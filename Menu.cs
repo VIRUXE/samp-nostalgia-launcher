@@ -53,17 +53,17 @@ namespace NostalgiaAnticheat {
                 () => Player.LoggedIn,
                 async () => {
                     try {
-                    if (await Player.Logout()) {
-                        Program.DisplayMessage("Deslogado com Sucesso", "Logged out.", ConsoleColor.Green, true, true);
-                    } else
-                        Program.DisplayMessage("Ocorreu um erro ao deslogar.", "An error ocurred while logging out.", ConsoleColor.Red, true, true);
+                        if (await Player.Logout())
+                            Program.DisplayMessage("Deslogado com Sucesso", "Logged out.", ConsoleColor.Green, true, true);
+                        else
+                            Program.DisplayMessage("Ocorreu um erro ao deslogar.", "An error ocurred while logging out.", ConsoleColor.Red, true, true);
                     } catch (Exception e) { Console.WriteLine(e); }
                 }
             ),
             new MenuOption(("Jogar", "Play"),
                 () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsInstallationValid,
                 () => {
-                    var verificationResult = GTASA.Verify();
+                    /*var verificationResult = GTASA.Verify();
 
                     if(verificationResult) {
                         if(GTASA.Launch())
@@ -72,14 +72,14 @@ namespace NostalgiaAnticheat {
                             Program.DisplayMessage("O jogo já se encontra iniciado. Focando na tela.", "The GTASA is already running. Showing window.", ConsoleColor.Yellow, true, true);
                     } else {
                         Debug.WriteLine("verify");
-                    }
+                    }*/
 
                     return Task.CompletedTask;
                 }
             ),
             new MenuOption(("Mudar Pasta do Jogo", "Change Game Path"),
                 () => !GTASA.IsRunning,
-                () => {
+                async () => {
                     while (true) {
                         List<string> paths = new(Settings.InstallationPaths);
 
@@ -88,7 +88,8 @@ namespace NostalgiaAnticheat {
                         Console.WriteLine("Available installation paths:");
                         for (int i = 0; i < paths.Count; i++) Console.WriteLine($"{i + 1}. {paths[i]}");
 
-                        Console.WriteLine($"{paths.Count + 1}. Select a new installation path");
+                        Console.WriteLine($"{paths.Count + 1}. Select a new Installation Path");
+                        Console.WriteLine($"{paths.Count + 2}. Download and Install a new GTA San Andreas folder");
 
                         int choice;
                         while (true) {
@@ -96,13 +97,26 @@ namespace NostalgiaAnticheat {
 
                             var keyInfo = Console.ReadKey();
                             Console.WriteLine();  // Move to next line as ReadKey doesn't do this automatically
-                            if (int.TryParse(keyInfo.KeyChar.ToString(), out choice) && choice >= 1 && choice <= paths.Count + 1)
+                            if (int.TryParse(keyInfo.KeyChar.ToString(), out choice) && choice >= 1 && choice <= paths.Count + 2)
                                 break;
                             else
                                 Console.WriteLine("Invalid choice, please try again.");
                         }
 
-                        if (choice == paths.Count + 1) {
+                        if (choice == paths.Count + 2) {
+                            Console.Write("Enter the path where you want to install the game: ");
+                            string installPath = Console.ReadLine();
+
+                            if (await GTASA.DownloadGameArchive()) {
+                                if (GTASA.DecompressGameArchive(installPath)) {
+                                    Console.WriteLine("Game downloaded and installed successfully.");
+                                } else {
+                                    Console.WriteLine("Failed to decompress the game archive.");
+                                }
+                            } else {
+                                Console.WriteLine("Failed to download the game archive.");
+                            }
+                        } else if (choice == paths.Count + 1) {
                             SAMP.AskForInstallationPath();
                             break;
                         } else {
@@ -124,8 +138,6 @@ namespace NostalgiaAnticheat {
                             }
                         }
                     }
-
-                    return Task.CompletedTask;
                 }
             ),
             new MenuOption(("Focar no Jogo", "Focus on GTASA"),
@@ -165,7 +177,7 @@ namespace NostalgiaAnticheat {
                     password += info.KeyChar;
                 } else if (info.Key == ConsoleKey.Backspace) {
                     if (!string.IsNullOrEmpty(password)) {
-                        password = password.Substring(0, password.Length - 1);
+                        password = password[..^1];
                         Console.Write("\b \b");
                     }
                 }
