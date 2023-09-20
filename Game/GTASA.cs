@@ -1,4 +1,6 @@
 ﻿using Microsoft.Win32;
+using SharpCompress.Archives;
+using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -316,11 +318,11 @@ namespace NostalgiaAnticheat.Game {
 
             badFiles = new List<(string FilePath, string Issue)>();
 
-            static DateTime UnixTimeStampToDateTime(long unixTimeStamp) {
+            /*static DateTime UnixTimeStampToDateTime(long unixTimeStamp) {
                 DateTime dateTimeValue = new(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
                 dateTimeValue = dateTimeValue.AddSeconds(unixTimeStamp).ToLocalTime();
                 return dateTimeValue;
-            }
+            }*/
 
             static bool ValidateNode(JsonElement node, string currentPath, List<(string FilePath, string Issue)> badFilesList) {
                 foreach (var property in node.EnumerateObject()) {
@@ -330,25 +332,22 @@ namespace NostalgiaAnticheat.Game {
 
                     if (property.Name.Equals("files", StringComparison.OrdinalIgnoreCase)) {
                         foreach (var fileNode in property.Value.EnumerateObject()) {
-                            string fileName = fileNode.Name;
-                            JsonElement fileProperties = fileNode.Value;
-
-                            string filePath = Path.Combine(newPath, fileName);
+                            string filePath = Path.Combine(newPath, fileNode.Name);
 
                             if (File.Exists(filePath)) {
                                 FileInfo fileInfo = new(filePath);
-                                long expectedSize = fileProperties.GetProperty("size").GetInt64();
-                                long expectedLastModified = fileProperties.GetProperty("last_modified").GetInt64();
+                                long expectedSize = fileNode.Value.GetProperty("size").GetInt64();
+                                long expectedLastModified = fileNode.Value.GetProperty("last_modified").GetInt64();
+                                long fileLastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc).ToUnixTimeSeconds();
 
                                 if (fileInfo.Length != expectedSize) badFilesList.Add((filePath, "File size mismatch"));
 
-                                if(fileInfo.LastWriteTime.ToLocalTime() != UnixTimeStampToDateTime(expectedLastModified)) badFilesList.Add((filePath, "Last modified time mismatch"));
+                                if (fileLastModified != expectedLastModified) badFilesList.Add((filePath, $"Last modified time mismatch: {fileLastModified} Expected: {expectedLastModified}"));
                             } else
                                 badFilesList.Add((filePath, "File does not exist"));
                         }
-                    } else if (property.Value.ValueKind == JsonValueKind.Object) {
+                    } else if (property.Value.ValueKind == JsonValueKind.Object)
                         ValidateNode(property.Value, newPath, badFilesList);
-                    }
                 }
 
                 return true;
@@ -359,6 +358,159 @@ namespace NostalgiaAnticheat.Game {
                 return badFiles.Count == 0;
             } catch (Exception ex) {
                 Debug.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+        public static async Task<bool> DownloadGameArchive() {
+            var archivePath = Path.Combine(Directory.GetCurrentDirectory(), "gtasa.7z");
+
+            try {
+                using HttpClient client = new();
+
+                // Get the total size of the file to be downloaded
+                var responseHead = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "http://scavengenostalgia.fun/baixar/gtasa.7z"));
+                var totalBytes = responseHead.Content.Headers.ContentLength.GetValueOrDefault();
+
+                var fileInfo = new FileInfo(archivePath);
+                long startRange = 0;
+                if (fileInfo.Exists) {
+                    startRange = fileInfo.Length;
+
+                    if (startRange >= totalBytes) {
+                        Console.WriteLine("Game archive already downloaded");
+                        return true;
+                    }
+                }
+
+                CancellationTokenSource cts = new();
+
+                Task keyListenerTask = Task.Run(() => {
+                    while (true) {
+                        if (Console.KeyAvailable) {
+                            var key = Console.ReadKey(true);
+                            if (key.Key == ConsoleKey.Escape) {
+                                cts.Cancel();
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                // Specify the starting range in the header
+                client.DefaultRequestHeaders.Range = new System.Net.Http.Headers.RangeHeaderValue(startRange, null);
+
+                using var response = await client.GetAsync("http://scavengenostalgia.fun/baixar/gtasa.7z", HttpCompletionOption.ResponseHeadersRead, cts.Token);
+
+                if (!response.IsSuccessStatusCode) {
+                    Console.WriteLine("Error: Unable to download the Game archive");
+                    return false;
+                }
+
+                using var contentStream = await response.Content.ReadAsStreamAsync();
+                using var fileStream = new FileStream(archivePath, FileMode.Append, FileAccess.Write, FileShare.None, 8192, true);
+                var totalReadBytes = startRange;
+                var buffer = new byte[8192];
+                var isMoreToRead = true;
+
+                do {
+                    var read = await contentStream.ReadAsync(buffer, 0, buffer.Length, cts.Token);
+                    if (read == 0) {
+                        isMoreToRead = false;
+                    } else {
+                        await fileStream.WriteAsync(buffer, 0, read, cts.Token);
+
+                        totalReadBytes += read;
+                        var percentage = totalReadBytes * 100 / totalBytes;
+
+                        Console.SetCursorPosition(0, Console.CursorTop);
+                        Console.Write($"{percentage}% downloaded");
+                    }
+                }
+                while (isMoreToRead && !cts.Token.IsCancellationRequested);
+
+                if (cts.Token.IsCancellationRequested) {
+                    Console.WriteLine("Download cancelled.");
+                    return false;
+                }
+
+                return true;
+            } catch (OperationCanceledException) {
+                Console.WriteLine("Download cancelled by user.");
+                return false;
+            } catch (Exception) {
+                Console.WriteLine("An error occurred while downloading the game archive.");
+                return false;
+            }
+        }
+
+        public static bool DecompressGameArchive(string installPath) {
+            var archivePath = Path.Combine(Directory.GetCurrentDirectory(), "gtasa.7z");
+
+            if (!File.Exists(archivePath)) {
+                Console.WriteLine("The archive file does not exist.");
+                return false;
+            }
+
+            try {
+                if (!Directory.Exists(installPath)) Directory.CreateDirectory(installPath);
+
+                Console.WriteLine("Decompressing GTASA:");
+
+                if (OS.Is7ZipInstalled()) {
+                    var processStartInfo = new ProcessStartInfo {
+                        FileName = "7z",
+                        Arguments = $"x {archivePath} -o{installPath} -y",
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = false,
+                    };
+
+                    var process = Process.Start(processStartInfo);
+
+                    process.OutputDataReceived += (sender, e) => Console.WriteLine(e.Data);
+
+                    process.BeginOutputReadLine(); // Start reading from the standard output
+                    process.WaitForExit();
+
+                    Console.WriteLine(process.ExitCode == 0 ? "\nDecompression completed." : "\nDecompression failed.");
+
+                    return process.ExitCode == 0;
+                } else {
+                    using var archive = SharpCompress.Archives.SevenZip.SevenZipArchive.Open(archivePath);
+                    int totalEntries = archive.Entries.Count;
+                    int entryIndex = 0;
+                    int dotCount = 0;
+                    string currentFileName = string.Empty;
+
+                    Timer dotTimer = new(_ => {
+                        dotCount = (dotCount + 1) % 4;
+                        Console.SetCursorPosition(0, Console.CursorTop);
+                        Console.Write(new string(' ', Console.WindowWidth - 1));
+                        Console.SetCursorPosition(0, Console.CursorTop);
+
+                        double progress = ((double)entryIndex / totalEntries) * 100;
+                        Console.Write($"Decompressing: {currentFileName} ({progress:0.00}%) {new string('.', dotCount)}");
+                    }, null, 0, 500);
+
+                    foreach (var entry in archive.Entries.Where(e => !e.IsDirectory)) {
+                        currentFileName = entry.Key;
+                        entry.WriteToDirectory(installPath, new ExtractionOptions() { ExtractFullPath = true, Overwrite = true });
+
+                        entryIndex++;
+                    }
+
+                    dotTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                    dotTimer.Dispose();
+
+                    Console.WriteLine("\nDecompression completed.");
+                    return true;
+                }
+            } catch (OperationCanceledException) {
+                Console.WriteLine("\nDecompression was cancelled.");
+                return false;
+            } catch (Exception ex) {
+                Console.WriteLine($"\nDecompression failed: {ex.Message}");
                 return false;
             }
         }
