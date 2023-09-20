@@ -1,10 +1,12 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -62,6 +64,88 @@ namespace NostalgiaAnticheat.Game {
                 if (GamePath == null) return false;
 
                 return new[] { "samp.exe", "samp.dll" }.All(file => File.Exists(Path.Combine(GamePath, file)));
+            }
+        }
+
+        public static async Task<bool> Install() {
+            try {
+                string installerUrl = "http://scavengenostalgia.fun/baixar/sa-mp-0.3.7-R5-1-install.exe";
+                string installerName = Path.GetFileName(new Uri(installerUrl).AbsolutePath);
+                string installerPath = Path.Combine(Directory.GetCurrentDirectory(), installerName);
+
+                if (!File.Exists(installerPath)) {
+                    Console.Write("Downloading SA-MP installer... ");
+                    try {
+                        byte[] installerBytes = await new HttpClient().GetByteArrayAsync(installerUrl);
+                        await File.WriteAllBytesAsync(installerPath, installerBytes);
+                        Console.WriteLine("Done.");
+                    } catch (Exception downloadEx) {
+                        Console.WriteLine("Failed.");
+                        Console.WriteLine("Could not download the installer: " + downloadEx.Message);
+                        return false;
+                    }
+                }
+
+                using Process installProcess = new() {
+                    StartInfo = new ProcessStartInfo {
+                        FileName = installerPath,
+                        Verb = "runas"
+                    }
+                };
+
+                Console.Write("Installing SA-MP... ");
+
+                while (true) {
+                    try {
+                        installProcess.Start();
+                    } catch (Win32Exception) {
+                        // Checking if the application is running with admin privileges
+
+                        if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)) {
+                            Console.WriteLine("Failed.");
+                            Console.WriteLine(
+                                "The application is not running with administrator privileges.\n" +
+                                "You need to either install it manually or run the Launcher as Administrator."
+                            );
+
+                            // Opening the folder where the installer was downloaded
+                            Process.Start("explorer.exe", $"/select,\"{installerPath}\"");
+
+                            while (true) {
+                                Console.WriteLine("Press 'Space' to retry if you've installed it or 'Esc' to cancel.");
+                                ConsoleKeyInfo key = Console.ReadKey(true);
+
+                                if (key.Key == ConsoleKey.Spacebar) {
+                                    if (IsInstalled) {
+                                        Console.WriteLine("Installation successful.");
+                                        return true;
+                                    } else
+                                        Console.WriteLine("SA-MP is not installed yet.");
+                                } else if (key.Key == ConsoleKey.Escape) {
+                                    Console.WriteLine("Installation canceled.");
+                                    return false;
+                                }
+                            }
+                        }
+
+                        throw; // Re-throwing the exception if it wasn't due to a lack of admin privileges
+                    }
+
+                    installProcess.WaitForExit();
+
+                    if (IsInstalled) {
+                        Console.WriteLine("Successful.");
+                        return true;
+                    } else {
+                        Console.WriteLine("Failed.");
+                        Console.WriteLine("Installation was not successful.");
+                        return false;
+                    }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine("Failed.");
+                Console.WriteLine($"An error occurred: {ex.Message}");
+                return false;
             }
         }
 
