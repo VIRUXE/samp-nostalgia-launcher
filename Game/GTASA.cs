@@ -16,7 +16,7 @@ using System.Threading.Tasks;
 using System.Xml.Linq;
 
 namespace NostalgiaAnticheat.Game {
-    internal class GTASA {
+    public static class GTASA {
         public const string EXECUTABLE_NAME = "gta_sa.exe";
         public const int MIN_GAME_FILES = 100;
 
@@ -27,10 +27,10 @@ namespace NostalgiaAnticheat.Game {
 
         private static JsonDocument _gameManifest;
 
-        public static string InstallationPath {get; private set;}
-        public static bool IsInstalled => GetInstallPath() != null;
-        public static string ExecutablePath => IsInstallationValid ? Path.Combine(InstallationPath, EXECUTABLE_NAME) : null;
-        public static bool IsInstallationValid => !string.IsNullOrEmpty(InstallationPath) && IsInstallationPathValid(InstallationPath);
+        public static string CurrentInstallationPath { get; private set; }
+        public static bool IsInstalled => InstallPath != null;
+        public static string ExecutablePath => IsInstallationValid ? Path.Combine(CurrentInstallationPath, EXECUTABLE_NAME) : null;
+        public static bool IsInstallationValid => !string.IsNullOrEmpty(CurrentInstallationPath) && IsInstallationPathValid(CurrentInstallationPath);
 
         public static async Task FetchManifest() {
             try {
@@ -65,13 +65,13 @@ namespace NostalgiaAnticheat.Game {
 
             if (!IsInstallationPathValid(path)) return false;
 
-            InstallationPath = path;
+            CurrentInstallationPath = path;
 
             return true;
         }
 
         // Get all the files in the installation directory
-        public static string[] GetFiles => IsInstallationValid ? Directory.GetFiles(InstallationPath, "*", SearchOption.AllDirectories) : null;
+        public static string[] GetFiles => IsInstallationValid ? Directory.GetFiles(CurrentInstallationPath, "*", SearchOption.AllDirectories) : null;
 
         // Used to store if the game is connected to the gameserver
         public static bool Playing { get; internal set; }
@@ -91,7 +91,7 @@ namespace NostalgiaAnticheat.Game {
             }
         }
 
-        public static string GetInstallPath() => (Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string)?.Replace("\"", "");
+        public static string InstallPath => (Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string)?.Replace("\"", "");
         public static async Task<string> Download() {
             string directoryPath;
             var isDirectoryConfirmed = false;
@@ -189,7 +189,7 @@ namespace NostalgiaAnticheat.Game {
             }
 
             Process = Process.Start(new ProcessStartInfo() {
-                FileName  = InstallationPath + "\\samp.exe",
+                FileName  = CurrentInstallationPath + "\\samp.exe",
                 Arguments = "sv.scavengenostalgia.fun:7777"
             });
 
@@ -513,6 +513,25 @@ namespace NostalgiaAnticheat.Game {
                 Console.WriteLine($"\nDecompression failed: {ex.Message}");
                 return false;
             }
+        }
+
+        public static async Task<bool> Install() {
+            Console.Write("Enter the path where you want to install the game: ");
+            string installPath = Console.ReadLine();
+
+            if (await DownloadGameArchive()) {
+                if (DecompressGameArchive(installPath)) {
+                    Console.WriteLine("Game downloaded and installed successfully.");
+                } else {
+                    Console.WriteLine("Failed to decompress the game archive.");
+                    return false;
+                }
+            } else {
+                Console.WriteLine("Failed to download the game archive.");
+                return false;
+            }
+
+            return true;
         }
 
         [DllImport("User32.dll")]

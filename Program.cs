@@ -99,24 +99,38 @@ namespace NostalgiaAnticheat {
             AppDomain.CurrentDomain.ProcessExit += async (s, e) => await Player.Logout();
 
             // Now before any actual good stuff we make sure we have GTASA and SAMP installed
-            if(!GTASA.IsInstalled) {
-                Console.WriteLine("Não tem GTA San Andreas instalado. Impossível continuar.");
-
-                Console.ReadKey();
-                Environment.Exit(0);
-            } else { // Is installed
-                if(!SAMP.IsInstalled) {
-                    Console.WriteLine("Não tem SA-MP instalado. Impossível continuar.");
-
-                    Console.ReadKey();
-                    Environment.Exit(0);
-                } else {
-                    /*if(SAMP.Version != "0.3.7.5") {
-                        Console.WriteLine("O seu SA-MP tem que ser a versão 0.3.7 R5. Impossível continuar.");
-
+            if (!GTASA.IsInstalled) {
+                Console.WriteLine("GTA San Andreas is not installed. Would you like to install it? (y/n)");
+                char choice = Console.ReadKey().KeyChar;
+                if (choice == 'y' || choice == 'Y') {
+                    bool success = await GTASA.Install();
+                    if (!success) {
+                        Console.WriteLine("Installation failed. Unable to continue.");
                         Console.ReadKey();
                         Environment.Exit(0);
-                    }*/
+                    }
+                } else {
+                    Console.WriteLine("GTA San Andreas is required. Unable to continue.");
+                    Console.ReadKey();
+                    Environment.Exit(0);
+                }
+            }
+
+            // Check if SA-MP is installed
+            if (!SAMP.IsInstalled) {
+                Console.WriteLine("SA-MP is not installed. Would you like to install it? (y/n)");
+                char choice = Console.ReadKey().KeyChar;
+                if (choice == 'y' || choice == 'Y') {
+                    bool success = await SAMP.Install();
+                    if (!success) {
+                        Console.WriteLine("Installation failed. Unable to continue.");
+                        Console.ReadKey();
+                        Environment.Exit(0);
+                    }
+                } else {
+                    Console.WriteLine("SA-MP is required. Unable to continue.");
+                    Console.ReadKey();
+                    Environment.Exit(0);
                 }
             }
 
@@ -138,7 +152,7 @@ namespace NostalgiaAnticheat {
 
             Console.WriteLine($"Nickname: {SAMP.PlayerName}");
             Console.WriteLine($"Caminho do Jogo: {SAMP.GamePath}");
-            Console.WriteLine($"SA-MP: {SAMP.Version}");
+            Console.WriteLine($"SA-MP: {SAMP.Version}\n");
 
             //await Player.Login("VIRUXE", "conacona");
 
@@ -146,7 +160,7 @@ namespace NostalgiaAnticheat {
 
             Debug.WriteLine(GTASA.CountFilesInManifest());
 
-            GTASA.SetInstallationPath(SAMP.GamePath);
+            if (!GTASA.SetInstallationPath(SAMP.GamePath)) Console.WriteLine($"Your current Game Directory (\"{SAMP.GamePath}\") is not valid.");
 
             GTASA.StartMonitoring();
 

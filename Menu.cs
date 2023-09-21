@@ -104,18 +104,7 @@ namespace NostalgiaAnticheat {
                         }
 
                         if (choice == paths.Count + 2) {
-                            Console.Write("Enter the path where you want to install the game: ");
-                            string installPath = Console.ReadLine();
-
-                            if (await GTASA.DownloadGameArchive()) {
-                                if (GTASA.DecompressGameArchive(installPath)) {
-                                    Console.WriteLine("Game downloaded and installed successfully.");
-                                } else {
-                                    Console.WriteLine("Failed to decompress the game archive.");
-                                }
-                            } else {
-                                Console.WriteLine("Failed to download the game archive.");
-                            }
+                            await GTASA.Install();
                         } else if (choice == paths.Count + 1) {
                             SAMP.AskForInstallationPath();
                             break;
