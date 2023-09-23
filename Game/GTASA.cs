@@ -29,8 +29,8 @@ namespace NostalgiaAnticheat.Game {
 
         public static string CurrentInstallationPath { get; private set; }
         public static bool IsInstalled => InstallPath != null;
-        public static string ExecutablePath => IsInstallationValid ? Path.Combine(CurrentInstallationPath, EXECUTABLE_NAME) : null;
-        public static bool IsInstallationValid => !string.IsNullOrEmpty(CurrentInstallationPath) && IsInstallationPathValid(CurrentInstallationPath);
+        public static string ExecutablePath => IsCurrentInstallationValid ? Path.Combine(CurrentInstallationPath, EXECUTABLE_NAME) : null;
+        public static bool IsCurrentInstallationValid => !string.IsNullOrEmpty(CurrentInstallationPath) && ValidateInstallationPath(CurrentInstallationPath).Valid;
 
         public static async Task FetchManifest() {
             try {
@@ -39,39 +39,43 @@ namespace NostalgiaAnticheat.Game {
             } catch { return; }
         }
 
-        public static bool IsInstallationPathValid(string installationPath) {
-            string path = !string.IsNullOrEmpty(Path.GetExtension(installationPath)) ? Path.GetDirectoryName(installationPath) : installationPath;
+        public static (bool Valid, List<string> Reasons) ValidateInstallationPath(string installationPath) {
+            List<string> reasons = new();
 
-            if (!Directory.Exists(path)) return false;
+            string path = !string.IsNullOrEmpty(Path.GetExtension(installationPath))
+                          ? Path.GetDirectoryName(installationPath)
+                          : installationPath;
 
-            if (!IsExecutableValid(Path.Combine(path, EXECUTABLE_NAME))) return false;
+            if (!Directory.Exists(path)) reasons.Add("Directory does not exist.");
+
+            if (!IsExecutableValid(Path.Combine(path, EXECUTABLE_NAME))) reasons.Add("Executable is not valid.");
 
             string[] installationFiles = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
 
-            if(installationFiles.Length < CountFilesInManifest()) return false;
+            if (installationFiles.Length < CountFilesInManifest()) reasons.Add("Not all required files are present.");
 
             if (!ValidateInstallationAgainstManifest(installationPath, out List<(string FilePath, string Issue)> badFiles)) {
                 Debug.WriteLine(string.Join("\n", badFiles.Select(bf => $"{bf.FilePath}: {bf.Issue}")));
-                return false;
+                reasons.Add("Files did not validate against manifest.");
             }
 
-            return true;
+            return (reasons.Count == 0, reasons);
         }
 
-        public static bool SetInstallationPath(string installationPath) {
-            string path = installationPath;
+        public static (bool IsSuccessful, List<string> Reasons) SetInstallationPath(string installationPath) {
+            string path = Path.HasExtension(installationPath) ? Path.GetDirectoryName(installationPath) : installationPath;
 
-            if (Path.HasExtension(installationPath)) path = Path.GetDirectoryName(installationPath);
+            var (isValid, reasons) = ValidateInstallationPath(installationPath);
 
-            if (!IsInstallationPathValid(path)) return false;
+            if (!isValid) return (false, reasons);
 
             CurrentInstallationPath = path;
 
-            return true;
+            return (true, null);
         }
 
         // Get all the files in the installation directory
-        public static string[] GetFiles => IsInstallationValid ? Directory.GetFiles(CurrentInstallationPath, "*", SearchOption.AllDirectories) : null;
+        public static string[] GetFiles => IsCurrentInstallationValid ? Directory.GetFiles(CurrentInstallationPath, "*", SearchOption.AllDirectories) : null;
 
         // Used to store if the game is connected to the gameserver
         public static bool Playing { get; internal set; }
@@ -254,7 +258,7 @@ namespace NostalgiaAnticheat.Game {
         /// <summary>
         /// Starts monitoring for the GTA SA processes. Kills any non-legitimate instances of the game and raises events when the game starts or exits.
         /// </summary>
-        public static async void StartMonitoring() {
+        public static async void MonitorProcesses() {
             if(Monitoring) return;
 
             Monitoring = true;
@@ -293,7 +297,6 @@ namespace NostalgiaAnticheat.Game {
                 }
             });
         }
-
 
         public static int CountFilesInManifest() {
             static int CountFilesInNode(JsonElement node) {

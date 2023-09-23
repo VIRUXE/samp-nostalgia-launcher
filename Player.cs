@@ -35,9 +35,8 @@ namespace NostalgiaAnticheat {
     #endregion
 
     public static class Player {
-        private const string API_ADDR = "https://api.scavengenostalgia.fun";
 
-        public record struct PingData(IEnumerable<(string FileName, string WindowTitle)> openWindows, List<string> modules);
+        public record struct PingData(IEnumerable<(string FileName, string WindowTitle)> OpenWindows, List<string> Modules);
 
         private static readonly HttpClient _httpClient = new();
         private static Timer _pinger;
@@ -57,7 +56,7 @@ namespace NostalgiaAnticheat {
             if (!GTASA.IsRunning) return;
 
             try {
-                var response = await _httpClient.PostAsJsonAsync(API_ADDR + "/player/ping", new PingData(OS.GetOpenWindows(), new List<string> { }));
+                var response = await _httpClient.PostAsJsonAsync(Program.API_ADDR + "/player/ping", new PingData(OS.GetOpenWindows(), new List<string> { }));
 
                 var responseContent = await response.Content.ReadAsStringAsync();
 
@@ -103,7 +102,7 @@ namespace NostalgiaAnticheat {
 
         public static async Task<Dictionary<string, string>> Login(string nickname, string password) {
             try {
-                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/player/login", new StringContent(JsonSerializer.Serialize(new {
+                using HttpResponseMessage response = await _httpClient.PostAsync(Program.API_ADDR + "/player/login", new StringContent(JsonSerializer.Serialize(new {
                     nickname,
                     password,
                     serial = _hwid,
@@ -175,7 +174,7 @@ namespace NostalgiaAnticheat {
             if (!string.IsNullOrEmpty(message)) Console.WriteLine($"Logout Message: {message}");
 
             try {
-                using HttpResponseMessage response = await _httpClient.PostAsync(API_ADDR + "/player/logout", null);
+                using HttpResponseMessage response = await _httpClient.PostAsync(Program.API_ADDR + "/player/logout", null);
 
                 _httpClient.DefaultRequestHeaders.Authorization = null;
 
@@ -187,7 +186,7 @@ namespace NostalgiaAnticheat {
 
         public static async Task<bool?> IsHwBanned() {
             try {
-                HttpResponseMessage response = await _httpClient.GetAsync(API_ADDR + $"/hwid/{_hwid}");
+                HttpResponseMessage response = await _httpClient.GetAsync(Program.API_ADDR + $"/hwid/{_hwid}");
 
                 if (response.StatusCode == HttpStatusCode.Forbidden) {
                     string result = await response.Content.ReadAsStringAsync();
@@ -205,6 +204,7 @@ namespace NostalgiaAnticheat {
             return null;
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "IDE1006:Naming Styles")]
         private static string gpci() {
             byte[] GPCI_SBOX = {
                 0,   4,   8,   12,  4,   5,   9,   13,  8,   9,   10,  14,  12,  13,  14,  15,

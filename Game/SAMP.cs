@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -53,10 +54,19 @@ namespace NostalgiaAnticheat.Game {
             }
         }
 
-
         public static string PlayerName {
             get => Registry.GetValue(@"HKEY_CURRENT_USER\Software\SAMP", "PlayerName", null) as string;
             set => Registry.SetValue(@"HKEY_CURRENT_USER\Software\SAMP", "PlayerName", value);
+        }
+
+        public static string Version {
+            get {
+                var dllPath = Path.Combine(GamePath, "samp.dll");
+
+                if (File.Exists(dllPath)) return FileVersionInfo.GetVersionInfo(dllPath).FileVersion?.Replace(", ", ".");
+
+                return null;
+            }
         }
 
         public static bool IsInstalled {
@@ -149,13 +159,96 @@ namespace NostalgiaAnticheat.Game {
             }
         }
 
-        public static string Version {
-            get {
-                var dllPath = Path.Combine(GamePath, "samp.dll");
+        public static async Task ChangeGamePath() {
+            while (true) {
+                List<string> paths = new(Settings.InstallationPaths);
 
-                if (File.Exists(dllPath)) return FileVersionInfo.GetVersionInfo(dllPath).FileVersion?.Replace(", ", ".");
+                if (!paths.Contains(GamePath)) paths.Insert(0, GamePath);
 
-                return null;
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.WriteLine("Select or Add a GTA San Andreas Installation Path:");
+                Console.ResetColor();
+                for (int i = 0; i < paths.Count; i++) {
+                    var path = paths[i];
+                    var validationResult = GTASA.ValidateInstallationPath(path);
+                    var displayText = $"{i + 1}. {path}";
+
+                    if (path == GamePath) displayText += " (Current)";
+
+                    if (!validationResult.Valid) {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        displayText += " (invalid)";
+                    }
+
+                    Console.WriteLine(displayText);
+                    Console.ResetColor();
+                }
+
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.WriteLine($"{paths.Count + 1}. Select an Existing Installation Path");
+                Console.WriteLine($"{paths.Count + 2}. Download and Install a Clean GTA San Andreas");
+                Console.ResetColor();
+
+                int choice;
+                while (true) {
+                    Console.Write("Choose an option: ");
+
+                    var keyInfo = Console.ReadKey();
+                    Console.WriteLine();  // Move to next line as ReadKey doesn't do this automatically
+                    if (int.TryParse(keyInfo.KeyChar.ToString(), out choice) && choice >= 1 && choice <= paths.Count + 2)
+                        break;
+                    else
+                        Console.WriteLine("Invalid choice, please try again.");
+                }
+                Console.WriteLine();
+
+                if (choice == paths.Count + 2) {
+                    await GTASA.Install();
+                } else if (choice == paths.Count + 1) {
+                    AskForInstallationPath();
+                    break;
+                } else {
+                    var path = paths[choice - 1];
+
+                    // Check if directory exists
+                    if (!Directory.Exists(path)) {
+                        Console.WriteLine($"The directory '{path}' no longer exists. Removing it from the list...");
+                        Settings.InstallationPaths.Remove(path);
+                        Settings.Save();
+                        Console.WriteLine("Path has been removed from the list. Relisting available paths...");
+                        continue;  // Continue the while loop to relist paths
+                    }
+
+                    var validationResult = GTASA.ValidateInstallationPath(path);
+
+                    if (path == GamePath) {
+                        Console.WriteLine("You have selected the current installation path.");
+                    } else {
+                        if (!validationResult.Valid) {
+                            Console.WriteLine($"This Installation Path '{path}' is Invalid. Would you like to remove it from the list? (y/n)");
+                            char removeChoice = Console.ReadKey().KeyChar;
+                            Console.WriteLine();
+                            if (removeChoice == 'y' || removeChoice == 'Y') {
+                                Settings.InstallationPaths.Remove(path);
+                                Settings.Save();
+                                Console.WriteLine("Path has been removed from the list. Relisting available paths...");
+                                continue;
+                            }
+                        }
+
+                        GamePath = path;
+                        Console.WriteLine($"Game path changed to: {path}");
+                    }
+
+                    if (!validationResult.Valid && validationResult.Reasons.Count > 0) {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"The path '{path}' is invalid for the following reasons:");
+                        foreach (var reason in validationResult.Reasons) Console.WriteLine($"- {reason}");
+                        Console.ResetColor();
+                    }
+
+                    break;
+                }
             }
         }
 
@@ -189,7 +282,7 @@ namespace NostalgiaAnticheat.Game {
                     }
                 }
 
-                Console.WriteLine();  // Move to the next line after Enter is pressed
+                Console.WriteLine("\n");  // Move to the next line after Enter is pressed
 
                 string installationPath = inputBuilder.ToString();
 
@@ -198,16 +291,17 @@ namespace NostalgiaAnticheat.Game {
                     continue;
                 }
 
-                if (GTASA.IsInstallationPathValid(installationPath)) {
-                    Console.WriteLine($"Installation Path changed to: {installationPath}");
-                    GamePath = installationPath;
+                if (File.Exists(Path.Combine(installationPath, "gta_sa.exe"))) {
+                    Console.WriteLine("Installation Path added.");
+                    //GamePath = installationPath;
 
-                    Settings.AddInstallationPath(GamePath);
+                    Settings.AddInstallationPath(installationPath);
 
                     break;
-                } else {
+                } else
                     Console.WriteLine("Invalid path. Please try again.");
-                }
+
+                Console.WriteLine();
             }
         }
 

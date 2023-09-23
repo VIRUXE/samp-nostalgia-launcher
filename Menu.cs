@@ -11,7 +11,7 @@ namespace NostalgiaAnticheat {
 
         private static readonly List<MenuOption> menuOptions = new() {
             new MenuOption(("Logar", "Login"),
-                () => !Player.LoggedIn && Gameserver.IsOnline,
+                () => !Player.LoggedIn && GTASA.IsCurrentInstallationValid && Gameserver.IsOnline,
                 async () => {
                     Program.DisplayMessage(
                         "Para entrar, você precisará fornecer seu Apelido e Senha do Servidor.\nDigite seu apelido (ou deixe em branco para usar o que tem no SA-MP):",
@@ -61,7 +61,7 @@ namespace NostalgiaAnticheat {
                 }
             ),
             new MenuOption(("Jogar", "Play"),
-                () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsInstallationValid,
+                () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsCurrentInstallationValid,
                 () => {
                     /*var verificationResult = GTASA.Verify();
 
@@ -79,54 +79,13 @@ namespace NostalgiaAnticheat {
             ),
             new MenuOption(("Mudar Pasta do Jogo", "Change Game Path"),
                 () => !GTASA.IsRunning,
-                async () => {
-                    while (true) {
-                        List<string> paths = new(Settings.InstallationPaths);
-
-                        if (!paths.Contains(SAMP.GamePath)) paths.Insert(0, SAMP.GamePath);
-
-                        Console.WriteLine("Available installation paths:");
-                        for (int i = 0; i < paths.Count; i++) Console.WriteLine($"{i + 1}. {paths[i]}");
-
-                        Console.WriteLine($"{paths.Count + 1}. Select a new Installation Path");
-                        Console.WriteLine($"{paths.Count + 2}. Download and Install a new GTA San Andreas folder");
-
-                        int choice;
-                        while (true) {
-                            Console.Write("Choose an option: ");
-
-                            var keyInfo = Console.ReadKey();
-                            Console.WriteLine();  // Move to next line as ReadKey doesn't do this automatically
-                            if (int.TryParse(keyInfo.KeyChar.ToString(), out choice) && choice >= 1 && choice <= paths.Count + 2)
-                                break;
-                            else
-                                Console.WriteLine("Invalid choice, please try again.");
-                        }
-
-                        if (choice == paths.Count + 2) {
-                            await GTASA.Install();
-                        } else if (choice == paths.Count + 1) {
-                            SAMP.AskForInstallationPath();
-                            break;
-                        } else {
-                            var path = paths[choice - 1];
-
-                            if (GTASA.IsInstallationPathValid(path)) {
-                                if (SAMP.GamePath == path) {
-                                    Console.WriteLine("You have selected the current installation path.");
-                                } else {
-                                    SAMP.GamePath = path;
-                                    Console.WriteLine($"Game path changed to: {path}");
-                                }
-
-                                break;
-                            } else {
-                                Settings.InstallationPaths.Remove(path);
-                                Settings.Save();
-                                Console.WriteLine($"The path {path} is invalid and has been removed from the list. Relisting available paths...");
-                            }
-                        }
-                    }
+                async () => await SAMP.ChangeGamePath()
+            ),
+            new MenuOption(("Reparar Jogo", "Repair Game"),
+                () => !GTASA.IsRunning && !GTASA.IsCurrentInstallationValid,
+                () => {
+                    Console.WriteLine("This feature is not yet implemented.");
+                    return Task.CompletedTask;
                 }
             ),
             new MenuOption(("Focar no Jogo", "Focus on GTASA"),
@@ -205,8 +164,8 @@ namespace NostalgiaAnticheat {
             DisplayOptions();
 
             while (true) {
-                bool condition = Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsInstallationValid;
-                Debug.WriteLine($"Player Logged In: {Player.LoggedIn}, GTASA Running: {!GTASA.IsRunning}, Gameserver Online: {Gameserver.IsOnline}, GTASA Installation Valid: {GTASA.IsInstallationValid}, Condition Result: {condition}");
+                bool condition = Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsCurrentInstallationValid;
+                Debug.WriteLine($"Player Logged In: {Player.LoggedIn}, GTASA Running: {!GTASA.IsRunning}, Gameserver Online: {Gameserver.IsOnline}, GTASA Installation Valid: {GTASA.IsCurrentInstallationValid}, Condition Result: {condition}");
 
                 ConsoleKeyInfo key = Console.ReadKey(true);
 

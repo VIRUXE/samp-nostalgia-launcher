@@ -10,6 +10,7 @@ namespace NostalgiaAnticheat {
     internal enum Language { EN, PT }
 
     internal class Program {
+        public const string API_ADDR = "https://api.scavengenostalgia.fun";
         public static Language SystemLanguage = Language.EN;
 
         public static string DisplayMessage(string ptMessage, string enMessage = null, ConsoleColor color = ConsoleColor.Gray, bool newLine = true, bool isAction = false) {
@@ -52,6 +53,7 @@ namespace NostalgiaAnticheat {
         }
 
         public static async Task Main() {
+
             Console.Title = "Scavenge Nostalgia";
 
             if (!new Mutex(false, "NostalgiaLauncherMutex").WaitOne(0, false)) return;
@@ -61,14 +63,25 @@ namespace NostalgiaAnticheat {
             DisplayMessage("Launcher do Scavenge Nostalgia", "Scavenge Nostalgia Launcher", ConsoleColor.White, false);
             Console.WriteLine($" - {Assembly.GetExecutingAssembly().GetName().Version}\n");
 
-            TaskCompletionSource<object> tcs = new();
+            if (!Updater.ShowReleaseNotes()) {
+                if (!await Updater.CheckAndUpdate()) {
+                    Console.WriteLine("Unable to continue. Press any key to exit.");
+                    Console.ReadKey();
+                    Environment.Exit(0);
+                }
+            }
+
+           TaskCompletionSource<object> tcs = new();
 
             Gameserver.ServerOnline += () => {
+                if (Console.CursorLeft > 0) Console.WriteLine();
                 DisplayMessage("Servidor ficou Online.", "Server is now Online.", ConsoleColor.Green, true, true);
                 tcs.TrySetResult(null);  // Set the task as complete when the server comes back online
+                Menu.DisplayOptions();
             };
 
             Gameserver.ServerOffline += () => {
+                if (Console.CursorLeft > 0) Console.WriteLine();
                 DisplayMessage("Servidor está Offline. Aguardando que volte...", "Server is Offline. Waiting for it to come back...", ConsoleColor.Red, true, true);
             };
 
@@ -98,38 +111,36 @@ namespace NostalgiaAnticheat {
             // Logout Player on app exit
             AppDomain.CurrentDomain.ProcessExit += async (s, e) => await Player.Logout();
 
-            // Now before any actual good stuff we make sure we have GTASA and SAMP installed
             if (!GTASA.IsInstalled) {
-                Console.WriteLine("GTA San Andreas is not installed. Would you like to install it? (y/n)");
-                char choice = Console.ReadKey().KeyChar;
-                if (choice == 'y' || choice == 'Y') {
-                    bool success = await GTASA.Install();
-                    if (!success) {
-                        Console.WriteLine("Installation failed. Unable to continue.");
+                Console.WriteLine("GTA San Andreas is not installed. Press space to install or Esc to exit.");
+
+                var keyInfo = Console.ReadKey();
+                if (keyInfo.Key == ConsoleKey.Spacebar) {
+                    if (!await GTASA.Install()) {
+                        Console.WriteLine("Installation failed. Press any key to exit.");
                         Console.ReadKey();
                         Environment.Exit(0);
                     }
-                } else {
-                    Console.WriteLine("GTA San Andreas is required. Unable to continue.");
-                    Console.ReadKey();
+                } else if (keyInfo.Key == ConsoleKey.Escape) {
+                    Console.WriteLine("Exiting application.");
                     Environment.Exit(0);
                 }
             }
 
-            // Check if SA-MP is installed
-            if (!SAMP.IsInstalled) {
-                Console.WriteLine("SA-MP is not installed. Would you like to install it? (y/n)");
-                char choice = Console.ReadKey().KeyChar;
-                if (choice == 'y' || choice == 'Y') {
-                    bool success = await SAMP.Install();
-                    if (!success) {
-                        Console.WriteLine("Installation failed. Unable to continue.");
+            Console.WriteLine($"Caminho do Jogo: {SAMP.GamePath}");
+
+            // Check for SA-MP
+            if (SAMP.GamePath == null) {
+                Console.WriteLine("SA-MP is not installed. Press space to install or Esc to exit.");
+                var keyInfo = Console.ReadKey();
+                if (keyInfo.Key == ConsoleKey.Spacebar) {
+                    if (!await SAMP.Install()) {
+                        Console.WriteLine("Installation failed. Press any key to exit.");
                         Console.ReadKey();
                         Environment.Exit(0);
                     }
-                } else {
-                    Console.WriteLine("SA-MP is required. Unable to continue.");
-                    Console.ReadKey();
+                } else if (keyInfo.Key == ConsoleKey.Escape) {
+                    Console.WriteLine("Exiting application.");
                     Environment.Exit(0);
                 }
             }
@@ -150,9 +161,10 @@ namespace NostalgiaAnticheat {
 
             LogWatcher.Start();
 
+            string sampVersion = SAMP.Version ?? "Unknown";
+
             Console.WriteLine($"Nickname: {SAMP.PlayerName}");
-            Console.WriteLine($"Caminho do Jogo: {SAMP.GamePath}");
-            Console.WriteLine($"SA-MP: {SAMP.Version}\n");
+            Console.WriteLine($"SA-MP: {sampVersion}\n");
 
             //await Player.Login("VIRUXE", "conacona");
 
@@ -160,9 +172,19 @@ namespace NostalgiaAnticheat {
 
             Debug.WriteLine(GTASA.CountFilesInManifest());
 
-            if (!GTASA.SetInstallationPath(SAMP.GamePath)) Console.WriteLine($"Your current Game Directory (\"{SAMP.GamePath}\") is not valid.");
+            var (isSuccessful, reasons) = GTASA.SetInstallationPath(SAMP.GamePath);
 
-            GTASA.StartMonitoring();
+            if (!isSuccessful) {
+                Console.ForegroundColor = ConsoleColor.Red;
+
+                Console.WriteLine("The installation path in SA-MP is not valid. Reason(s):");
+                foreach (var reason in reasons) Console.WriteLine($"- {reason}");
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.WriteLine("\nEither repair this Installation or create a clean Installation!\n");
+                Console.ResetColor();
+            }
+
+            GTASA.MonitorProcesses();
 
             await Menu.Init();
         }

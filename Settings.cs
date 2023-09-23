@@ -27,7 +27,7 @@ namespace NostalgiaAnticheat {
         }
 
         public static void AddInstallationPath(string newPath) {
-            if (!string.IsNullOrWhiteSpace(newPath) && !InstallationPaths.Contains(newPath) && GTASA.IsInstallationPathValid(newPath)) {
+            if (!string.IsNullOrWhiteSpace(newPath) && !InstallationPaths.Contains(newPath) && File.Exists(Path.Combine(newPath, "gta_sa.exe"))) {
                 InstallationPaths.Add(newPath);
                 Save();
             } else {
@@ -41,9 +41,7 @@ namespace NostalgiaAnticheat {
                 _data = JsonSerializer.Deserialize<Data>(json) ?? new Data();
 
                 // Only keep the valid paths
-                _data.InstallationPaths = _data.InstallationPaths
-                                             .Where(path => GTASA.IsInstallationPathValid(path))
-                                             .ToList();
+                //_data.InstallationPaths = _data.InstallationPaths.Where(path => GTASA.ValidateInstallationPath(path).Valid).ToList();
             } else {
                 _data = new Data();
                 Save();
