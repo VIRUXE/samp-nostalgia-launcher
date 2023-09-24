@@ -8,76 +8,96 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Xml.Linq;
+using static NostalgiaAnticheat.Game.GameValidation;
 
 namespace NostalgiaAnticheat.Game {
+    public class InstallationPath {
+        public readonly string SystemPath;
+
+        public bool HasSAMP => (new[] { "samp.exe", "samp.dll" }).All(file => File.Exists(Path.Combine(SystemPath, file)));
+
+        public bool HasExecutable => File.Exists(Path.Combine(SystemPath, GTASA.EXECUTABLE_FILENAME));
+
+        public string[] Files => Directory.GetFiles(SystemPath, "*", SearchOption.AllDirectories);
+
+        public bool Validate() {
+            if(!HasExecutable) return false;
+
+            var manifestFileCount = GTASA.CountFilesInManifest();
+
+            if (Files.Length < manifestFileCount) throw new MissingRequiredFilesException(Files.Length, manifestFileCount);
+
+            if (GTASA.Manifest == null) throw new InvalidOperationException("Manifest has not been fetched.");
+
+            var badFiles = new List<(string FilePath, BadFileReason Reason)>();
+
+            static bool ValidateNode(JsonElement node, string currentPath, List<(string FilePath, BadFileReason Reason)> badFilesList) {
+                foreach (var property in node.EnumerateObject()) {
+                    string newPath = property.Name.Equals("files", StringComparison.OrdinalIgnoreCase) ? currentPath : Path.Combine(currentPath, property.Name);
+
+                    if (property.Name.Equals("files", StringComparison.OrdinalIgnoreCase)) {
+                        foreach (var fileNode in property.Value.EnumerateObject()) {
+                            string filePath = Path.Combine(newPath, fileNode.Name);
+
+                            if (File.Exists(filePath)) {
+                                FileInfo fileInfo = new(filePath);
+                                long expectedSize = fileNode.Value.GetProperty("size").GetInt64();
+                                long expectedLastModified = fileNode.Value.GetProperty("last_modified").GetInt64();
+                                long fileLastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc).ToUnixTimeSeconds();
+
+                                if (fileInfo.Length != expectedSize) badFilesList.Add((filePath, BadFileReason.FileSizeMismatch));
+
+                                if (fileLastModified != expectedLastModified) badFilesList.Add((filePath, BadFileReason.LastModifiedTimeMismatch));
+                            } else
+                                badFilesList.Add((filePath, BadFileReason.DoesNotExist));
+                        }
+                    } else if (property.Value.ValueKind == JsonValueKind.Object)
+                        ValidateNode(property.Value, newPath, badFilesList);
+                }
+
+                return true;
+            }
+
+            try {
+                ValidateNode(GTASA.Manifest.RootElement, SystemPath, badFiles);
+                return badFiles.Count == 0;
+            } catch (Exception ex) {
+                Debug.WriteLine(ex.Message);
+                return false;
+            }
+
+            return true;
+        }
+
+        public InstallationPath(string path) {
+            path = !string.IsNullOrEmpty(Path.GetExtension(path)) ? Path.GetDirectoryName(path) : path;
+
+            try {
+                if (GameValidation.IsExecutableValid(Path.Combine(path, GTASA.EXECUTABLE_FILENAME)))
+                    SystemPath = path;
+                else
+                    throw new Exception("Path doesn't exist.");
+            } catch {
+                throw;
+            }
+        }
+    }
+
     public static class GTASA {
-        public const string EXECUTABLE_NAME = "gta_sa.exe";
-        public const int MIN_GAME_FILES = 100;
+        public const string EXECUTABLE_FILENAME = "gta_sa.exe";
 
         public static Process Process;
         public static bool Monitoring;
         public static event Action GameStarted;
         public static event Action GameExited;
 
-        private static JsonDocument _gameManifest;
+        public static JsonDocument Manifest;
 
         public static string CurrentInstallationPath { get; private set; }
-        public static bool IsInstalled => InstallPath != null;
-        public static string ExecutablePath => IsCurrentInstallationValid ? Path.Combine(CurrentInstallationPath, EXECUTABLE_NAME) : null;
-        public static bool IsCurrentInstallationValid => !string.IsNullOrEmpty(CurrentInstallationPath) && ValidateInstallationPath(CurrentInstallationPath).Valid;
 
-        public static async Task FetchManifest() {
-            try {
-                string json = await new HttpClient().GetStringAsync("https://api.scavengenostalgia.fun/game");
-                _gameManifest = JsonDocument.Parse(json);
-            } catch { return; }
-        }
-
-        public static (bool Valid, List<string> Reasons) ValidateInstallationPath(string installationPath) {
-            List<string> reasons = new();
-
-            string path = !string.IsNullOrEmpty(Path.GetExtension(installationPath))
-                          ? Path.GetDirectoryName(installationPath)
-                          : installationPath;
-
-            if (!Directory.Exists(path)) reasons.Add("Directory does not exist.");
-
-            if (!IsExecutableValid(Path.Combine(path, EXECUTABLE_NAME))) reasons.Add("Executable is not valid.");
-
-            string[] installationFiles = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
-
-            if (installationFiles.Length < CountFilesInManifest()) reasons.Add("Not all required files are present.");
-
-            if (!ValidateInstallationAgainstManifest(installationPath, out List<(string FilePath, string Issue)> badFiles)) {
-                Debug.WriteLine(string.Join("\n", badFiles.Select(bf => $"{bf.FilePath}: {bf.Issue}")));
-                reasons.Add("Files did not validate against manifest.");
-            }
-
-            return (reasons.Count == 0, reasons);
-        }
-
-        public static (bool IsSuccessful, List<string> Reasons) SetInstallationPath(string installationPath) {
-            string path = Path.HasExtension(installationPath) ? Path.GetDirectoryName(installationPath) : installationPath;
-
-            var (isValid, reasons) = ValidateInstallationPath(installationPath);
-
-            if (!isValid) return (false, reasons);
-
-            CurrentInstallationPath = path;
-
-            return (true, null);
-        }
-
-        // Get all the files in the installation directory
-        public static string[] GetFiles => IsCurrentInstallationValid ? Directory.GetFiles(CurrentInstallationPath, "*", SearchOption.AllDirectories) : null;
-
-        // Used to store if the game is connected to the gameserver
         public static bool Playing { get; internal set; }
 
         public static bool IsRunning => Process != null && Process.MainWindowHandle != IntPtr.Zero;
@@ -96,95 +116,7 @@ namespace NostalgiaAnticheat.Game {
         }
 
         public static string InstallPath => (Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string)?.Replace("\"", "");
-        public static async Task<string> Download() {
-            string directoryPath;
-            var isDirectoryConfirmed = false;
-
-            do {
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? "Por favor, insira um diretório para instalar o GTA:" : "Please enter a directory to install GTA:");
-                directoryPath = Console.ReadLine();
-
-                if (string.IsNullOrWhiteSpace(directoryPath)) {
-                    Console.WriteLine(Program.SystemLanguage == Language.PT ? "Caminho do diretório inválido." : "Invalid directory path.");
-                    continue;
-                }
-
-                try {
-                    string testFilePath = System.IO.Path.Combine(directoryPath, "tempfile.txt");
-                    using (File.Create(testFilePath)) { }
-                    File.Delete(testFilePath);
-                } catch (UnauthorizedAccessException) {
-                    Console.WriteLine(Program.SystemLanguage == Language.PT ? "O diretório não é gravável. Por favor, escolha outro diretório." : "Directory is not writable. Please choose another directory.");
-                    continue;
-                }
-
-                DriveInfo driveInfo = new(System.IO.Path.GetPathRoot(directoryPath));
-                if (driveInfo.AvailableFreeSpace < 574L * 1024 * 1024) {
-                    Console.WriteLine(Program.SystemLanguage == Language.PT ? "Não há espaço livre suficiente em disco. Por favor, escolha outro diretório." : "Not enough free disk space. Please choose another directory.");
-                    continue;
-                }
-
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? $"Você deseja instalar o GTA neste diretório: {directoryPath}? (s/n)" : $"Do you want to install GTA in this directory: {directoryPath}? (y/n)");
-                string confirmation = Console.ReadLine();
-                if (confirmation.ToLower() == (Program.SystemLanguage == Language.PT ? "s" : "y")) {
-                    isDirectoryConfirmed = true;
-
-                    // Create the directory if it doesn't exist
-                    if (!Directory.Exists(directoryPath)) {
-                        try {
-                            Directory.CreateDirectory(directoryPath);
-                            Console.WriteLine(Program.SystemLanguage == Language.PT ? "Diretório criado com sucesso." : "Directory successfully created.");
-                        } catch (Exception e) {
-                            Console.WriteLine(Program.SystemLanguage == Language.PT ? $"Falha ao criar diretório: {e.Message}" : $"Failed to create directory: {e.Message}");
-                        }
-                    }
-                }
-            } while (!isDirectoryConfirmed);
-
-            string downloadFilePath = System.IO.Path.Combine(directoryPath, "cleangtasa-small.7z");
-
-            if (File.Exists(downloadFilePath)) {
-                Console.WriteLine(Program.SystemLanguage == Language.PT ? "O arquivo já existe, download não é necessário." : "File already exists, no need to download.");
-                return null;
-            }
-
-            const int totalBlocks = 10;
-            const char progressBlock = '█';
-            const char emptyBlock = '.';
-
-            using HttpResponseMessage response = await new HttpClient().GetAsync("http://www.scavengenostalgia.fun/baixar/cleangtasa-small.7z", HttpCompletionOption.ResponseHeadersRead);
-
-            response.EnsureSuccessStatusCode();
-
-            long contentLength = response.Content.Headers.ContentLength.GetValueOrDefault(0);
-            if (contentLength == 0) throw new Exception("The content length could not be determined.");
-
-            using Stream contentStream = await response.Content.ReadAsStreamAsync(), fileStream = new FileStream(downloadFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-
-            var totalRead = 0L;
-            var buffer = new byte[8192];
-            var isMoreToRead = true;
-
-            do {
-                int read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
-                if (read == 0)
-                    isMoreToRead = false;
-                else {
-                    await fileStream.WriteAsync(buffer, 0, read);
-
-                    totalRead += read;
-                    double progress = (double)totalRead / contentLength;
-                    var blocksCount = (int)Math.Round(progress * totalBlocks);
-                    string progressBar = new string(progressBlock, blocksCount) + new string(emptyBlock, totalBlocks - blocksCount);
-
-                    Console.CursorLeft = 0;
-                    Console.Write($"[{progressBar}] {progress:P1}");
-                }
-            } while (isMoreToRead);
-
-            return directoryPath;
-        }
-
+        
         public static bool Launch() {
             if (IsRunning) {
                 Focus();
@@ -223,23 +155,6 @@ namespace NostalgiaAnticheat.Game {
             return true;
         }
 
-        private static bool IsExecutableValid(string executablePath) {
-            if(!File.Exists(executablePath)) return false;
-
-            string[] validHashes = {
-                "8C609F108AD737DEFFBD0D17C702F5974D290C4379DE742277B809F80350DA1C",
-                "A559AA772FD136379155EFA71F00C47AAD34BBFEAE6196B0FE1047D0645CBD26",
-                "403EB9EC0BE348615697363033C1166BBA8220A720D71A87576A6B2737A9B765",
-                "f01a00ce950fa40ca1ed59df0e789848c6edcf6405456274965885d0929343ac" // Mosby
-            };
-
-            // Convert the byte array to hexadecimal string
-            StringBuilder sb = new();
-            foreach (var byteValue in SHA256.Create().ComputeHash(File.OpenRead(executablePath))) sb.Append(byteValue.ToString("X2"));
-
-            return validHashes.Contains(sb.ToString(), StringComparer.OrdinalIgnoreCase);
-        }
-
         private static IEnumerable<Process> GetAllGTAProcesses() {
             return Process.GetProcesses()
                 .Where(p => !p.ProcessName.StartsWith("System") && !p.ProcessName.StartsWith("Idle"))
@@ -248,7 +163,7 @@ namespace NostalgiaAnticheat.Game {
                         string windowTitle = p.MainWindowTitle.ToLower();
                         return windowTitle != string.Empty &&
                                (windowTitle.Contains("gta san andreas") || windowTitle.Contains("gta:sa:mp")) &&
-                               p.MainModule.ModuleName.ToLower() == EXECUTABLE_NAME;
+                               p.MainModule.ModuleName.ToLower() == EXECUTABLE_FILENAME;
                     } catch {
                         return false;
                     }
@@ -303,66 +218,20 @@ namespace NostalgiaAnticheat.Game {
                 int fileCount = 0;
 
                 foreach (var entry in node.EnumerateObject()) {
-                    if (entry.Name == "files" && entry.Value.ValueKind == JsonValueKind.Object) {
+                    if (entry.Name == "files" && entry.Value.ValueKind == JsonValueKind.Object)
                         fileCount += entry.Value.EnumerateObject().Count();
-                    } else if (entry.Value.ValueKind == JsonValueKind.Object) {
+                    else if (entry.Value.ValueKind == JsonValueKind.Object)
                         fileCount += CountFilesInNode(entry.Value);
-                    }
                 }
 
                 return fileCount;
             }
 
-            return CountFilesInNode(_gameManifest.RootElement);
+            return CountFilesInNode(Manifest.RootElement);
         }
 
         public static bool ValidateInstallationAgainstManifest(string installationPath, out List<(string FilePath, string Issue)> badFiles) {
-            if (_gameManifest == null) throw new InvalidOperationException("Manifest has not been fetched.");
-
-            badFiles = new List<(string FilePath, string Issue)>();
-
-            /*static DateTime UnixTimeStampToDateTime(long unixTimeStamp) {
-                DateTime dateTimeValue = new(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                dateTimeValue = dateTimeValue.AddSeconds(unixTimeStamp).ToLocalTime();
-                return dateTimeValue;
-            }*/
-
-            static bool ValidateNode(JsonElement node, string currentPath, List<(string FilePath, string Issue)> badFilesList) {
-                foreach (var property in node.EnumerateObject()) {
-                    string newPath = property.Name.Equals("files", StringComparison.OrdinalIgnoreCase)
-                            ? currentPath
-                            : Path.Combine(currentPath, property.Name);
-
-                    if (property.Name.Equals("files", StringComparison.OrdinalIgnoreCase)) {
-                        foreach (var fileNode in property.Value.EnumerateObject()) {
-                            string filePath = Path.Combine(newPath, fileNode.Name);
-
-                            if (File.Exists(filePath)) {
-                                FileInfo fileInfo = new(filePath);
-                                long expectedSize = fileNode.Value.GetProperty("size").GetInt64();
-                                long expectedLastModified = fileNode.Value.GetProperty("last_modified").GetInt64();
-                                long fileLastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc).ToUnixTimeSeconds();
-
-                                if (fileInfo.Length != expectedSize) badFilesList.Add((filePath, "File size mismatch"));
-
-                                if (fileLastModified != expectedLastModified) badFilesList.Add((filePath, $"Last modified time mismatch: {fileLastModified} Expected: {expectedLastModified}"));
-                            } else
-                                badFilesList.Add((filePath, "File does not exist"));
-                        }
-                    } else if (property.Value.ValueKind == JsonValueKind.Object)
-                        ValidateNode(property.Value, newPath, badFilesList);
-                }
-
-                return true;
-            }
-
-            try {
-                ValidateNode(_gameManifest.RootElement, installationPath, badFiles);
-                return badFiles.Count == 0;
-            } catch (Exception ex) {
-                Debug.WriteLine(ex.Message);
-                return false;
-            }
+            
         }
 
         public static async Task<bool> DownloadGameArchive() {

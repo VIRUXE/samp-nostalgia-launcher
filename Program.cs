@@ -127,10 +127,10 @@ namespace NostalgiaAnticheat {
                 }
             }
 
-            Console.WriteLine($"Caminho do Jogo: {SAMP.GamePath}");
+            Console.WriteLine($"Caminho do Jogo: {SAMP.Path}");
 
             // Check for SA-MP
-            if (SAMP.GamePath == null) {
+            if (SAMP.Path == null) {
                 Console.WriteLine("SA-MP is not installed. Press space to install or Esc to exit.");
                 var keyInfo = Console.ReadKey();
                 if (keyInfo.Key == ConsoleKey.Spacebar) {
@@ -172,7 +172,7 @@ namespace NostalgiaAnticheat {
 
             Debug.WriteLine(GTASA.CountFilesInManifest());
 
-            var (isSuccessful, reasons) = GTASA.SetInstallationPath(SAMP.GamePath);
+            var (isSuccessful, reasons) = GTASA.SetInstallationPath(SAMP.Path);
 
             if (!isSuccessful) {
                 Console.ForegroundColor = ConsoleColor.Red;

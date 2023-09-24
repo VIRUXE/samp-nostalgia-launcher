@@ -77,7 +77,7 @@ namespace NostalgiaAnticheat {
                     return Task.CompletedTask;
                 }
             ),
-            new MenuOption(("Mudar Pasta do Jogo", "Change Game Path"),
+            new MenuOption(("Mudar Pasta do Jogo", "Change Game InstallationPath"),
                 () => !GTASA.IsRunning,
                 async () => await SAMP.ChangeGamePath()
             ),

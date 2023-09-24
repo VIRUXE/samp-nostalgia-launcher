@@ -228,7 +228,7 @@ namespace NostalgiaAnticheat {
             string userHomePath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             string gtaSanAndreasUserFiles = Path.Combine(userHomePath, "GTA San Andreas User Files");
 
-            byte[] hash = new SHA1Managed().ComputeHash(Encoding.UTF8.GetBytes(gtaSanAndreasUserFiles[4..]));
+            byte[] hash = SHA1.Create().ComputeHash(Encoding.UTF8.GetBytes(gtaSanAndreasUserFiles[4..]));
             byte[] swappedHash = Enumerable.Range(0, hash.Length / 4).SelectMany(i => hash.Skip(i * 4).Take(4).Reverse()).ToArray();
             byte[] byteArray = swappedHash.Select(b => GPCI_SBOX[b]).ToArray();
 

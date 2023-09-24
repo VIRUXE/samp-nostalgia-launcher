@@ -43,13 +43,13 @@ namespace NostalgiaAnticheat.Game {
     }
 
     internal class SAMP {
-        public static string GamePath {
+        public static string Path {
             get {
                 string path = Registry.GetValue(@"HKEY_CURRENT_USER\Software\SAMP", "gta_sa_exe", null) as string;
                 return path?.Replace("\\gta_sa.exe", "");
             }
             set {
-                string newValue = Path.Combine(value, "gta_sa.exe");
+                string newValue = System.IO.Path.Combine(value, "gta_sa.exe");
                 Registry.SetValue(@"HKEY_CURRENT_USER\Software\SAMP", "gta_sa_exe", newValue);
             }
         }
@@ -61,7 +61,7 @@ namespace NostalgiaAnticheat.Game {
 
         public static string Version {
             get {
-                var dllPath = Path.Combine(GamePath, "samp.dll");
+                var dllPath = System.IO.Path.Combine(Path, "samp.dll");
 
                 if (File.Exists(dllPath)) return FileVersionInfo.GetVersionInfo(dllPath).FileVersion?.Replace(", ", ".");
 
@@ -71,17 +71,17 @@ namespace NostalgiaAnticheat.Game {
 
         public static bool IsInstalled {
             get {
-                if (GamePath == null) return false;
+                if (Path == null) return false;
 
-                return new[] { "samp.exe", "samp.dll" }.All(file => File.Exists(Path.Combine(GamePath, file)));
+                return (new[] { "samp.exe", "samp.dll" }).All(file => File.Exists(System.IO.Path.Combine(Path, file)));
             }
         }
 
         public static async Task<bool> Install() {
             try {
                 string installerUrl = "http://scavengenostalgia.fun/baixar/sa-mp-0.3.7-R5-1-install.exe";
-                string installerName = Path.GetFileName(new Uri(installerUrl).AbsolutePath);
-                string installerPath = Path.Combine(Directory.GetCurrentDirectory(), installerName);
+                string installerName = System.IO.Path.GetFileName(new Uri(installerUrl).AbsolutePath);
+                string installerPath = System.IO.Path.Combine(Directory.GetCurrentDirectory(), installerName);
 
                 if (!File.Exists(installerPath)) {
                     Console.Write("Downloading SA-MP installer... ");
@@ -163,19 +163,19 @@ namespace NostalgiaAnticheat.Game {
             while (true) {
                 List<string> paths = new(Settings.InstallationPaths);
 
-                if (!paths.Contains(GamePath)) paths.Insert(0, GamePath);
+                if (!paths.Contains(Path)) paths.Insert(0, Path);
 
                 Console.ForegroundColor = ConsoleColor.White;
-                Console.WriteLine("Select or Add a GTA San Andreas Installation Path:");
+                Console.WriteLine("Select or Add a GTA San Andreas Installation InstallationPath:");
                 Console.ResetColor();
                 for (int i = 0; i < paths.Count; i++) {
                     var path = paths[i];
-                    var validationResult = GTASA.ValidateInstallationPath(path);
+                    var (pathValid, _) = GTASA.ValidateInstallationPath(path);
                     var displayText = $"{i + 1}. {path}";
 
-                    if (path == GamePath) displayText += " (Current)";
+                    if (path == Path) displayText += " (Current)";
 
-                    if (!validationResult.Valid) {
+                    if (!pathValid) {
                         Console.ForegroundColor = ConsoleColor.Red;
                         displayText += " (invalid)";
                     }
@@ -185,7 +185,7 @@ namespace NostalgiaAnticheat.Game {
                 }
 
                 Console.ForegroundColor = ConsoleColor.White;
-                Console.WriteLine($"{paths.Count + 1}. Select an Existing Installation Path");
+                Console.WriteLine($"{paths.Count + 1}. Select an Existing Installation InstallationPath");
                 Console.WriteLine($"{paths.Count + 2}. Download and Install a Clean GTA San Andreas");
                 Console.ResetColor();
 
@@ -215,35 +215,38 @@ namespace NostalgiaAnticheat.Game {
                         Console.WriteLine($"The directory '{path}' no longer exists. Removing it from the list...");
                         Settings.InstallationPaths.Remove(path);
                         Settings.Save();
-                        Console.WriteLine("Path has been removed from the list. Relisting available paths...");
+                        Console.WriteLine("InstallationPath has been removed from the list. Relisting available paths...");
                         continue;  // Continue the while loop to relist paths
                     }
 
-                    var validationResult = GTASA.ValidateInstallationPath(path);
+                    var (pathValid, invalidReasons) = GTASA.ValidateInstallationPath(path);
 
-                    if (path == GamePath) {
+                    if (path == Path) {
                         Console.WriteLine("You have selected the current installation path.");
-                    } else {
-                        if (!validationResult.Valid) {
-                            Console.WriteLine($"This Installation Path '{path}' is Invalid. Would you like to remove it from the list? (y/n)");
+                    } else { // User selected a different path from what is the current one
+                        if (!pathValid) {
+                            Console.WriteLine($"This Installation InstallationPath '{path}' is Invalid. Would you like to remove it from the list? (y/n)");
                             char removeChoice = Console.ReadKey().KeyChar;
                             Console.WriteLine();
                             if (removeChoice == 'y' || removeChoice == 'Y') {
                                 Settings.InstallationPaths.Remove(path);
                                 Settings.Save();
-                                Console.WriteLine("Path has been removed from the list. Relisting available paths...");
+                                Console.WriteLine("InstallationPath has been removed from the list. Relisting available paths...");
                                 continue;
                             }
                         }
 
-                        GamePath = path;
+                        Settings.OldInstallationPath = Path; // Save old path before updating
+                        Settings.Save();
+
+                        Path = path;
                         Console.WriteLine($"Game path changed to: {path}");
                     }
 
-                    if (!validationResult.Valid && validationResult.Reasons.Count > 0) {
+                    if (!pathValid && invalidReasons.Count > 0) {
                         Console.ForegroundColor = ConsoleColor.Red;
                         Console.WriteLine($"The path '{path}' is invalid for the following reasons:");
-                        foreach (var reason in validationResult.Reasons) Console.WriteLine($"- {reason}");
+                        foreach (var reason in invalidReasons) Console.WriteLine($"- {reason}");
                         Console.ResetColor();
                     }
 
@@ -287,13 +290,13 @@ namespace NostalgiaAnticheat.Game {
                 string installationPath = inputBuilder.ToString();
 
                 if (string.IsNullOrEmpty(installationPath)) {
-                    Console.WriteLine("Path cannot be empty. Please try again.");
+                    Console.WriteLine("InstallationPath cannot be empty. Please try again.");
                     continue;
                 }
 
-                if (File.Exists(Path.Combine(installationPath, "gta_sa.exe"))) {
-                    Console.WriteLine("Installation Path added.");
-                    //GamePath = installationPath;
+                if (File.Exists(System.IO.Path.Combine(installationPath, "gta_sa.exe"))) {
+                    Console.WriteLine("Installation InstallationPath added.");
+                    //InstallationPath = installationPath;
 
                     Settings.AddInstallationPath(installationPath);
 
@@ -316,33 +319,33 @@ namespace NostalgiaAnticheat.Game {
 
                 IPAddress serverIpAddress = ipAddresses.FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork) ?? throw new InvalidOperationException("No IPv4 address found for the specified hostname.");
 
-                using (UdpClient udpClient = new()) {
-                    udpClient.Client.SendTimeout    = timeout;
-                    udpClient.Client.ReceiveTimeout = timeout;
+                using UdpClient udpClient = new();
+                
+                udpClient.Client.SendTimeout    = timeout;
+                udpClient.Client.ReceiveTimeout = timeout;
 
-                    byte[] requestData     = Encoding.ASCII.GetBytes("SAMP");
-                    byte[] serverIpBytes   = serverIpAddress.GetAddressBytes();
-                    byte[] serverPortBytes = BitConverter.GetBytes((ushort)serverPort);
+                byte[] requestData     = Encoding.ASCII.GetBytes("SAMP");
+                byte[] serverIpBytes   = serverIpAddress.GetAddressBytes();
+                byte[] serverPortBytes = BitConverter.GetBytes((ushort)serverPort);
 
-                    if (BitConverter.IsLittleEndian) Array.Reverse(serverPortBytes);
+                if (BitConverter.IsLittleEndian) Array.Reverse(serverPortBytes);
 
-                    byte[][] arrays = { requestData, serverIpBytes, serverPortBytes, new byte[] { 0x69 } };
+                byte[][] arrays = { requestData, serverIpBytes, serverPortBytes, new byte[] { 0x69 } };
 
-                    using (MemoryStream ms = new()) {
-                        foreach (byte[] array in arrays) ms.Write(array, 0, array.Length);
-                        requestData = ms.ToArray();
-                    }
+                using (MemoryStream ms = new()) {
+                    foreach (byte[] array in arrays) ms.Write(array, 0, array.Length);
+                    requestData = ms.ToArray();
+                }
 
-                    udpClient.Send(requestData, requestData.Length, serverAddress, serverPort);
+                udpClient.Send(requestData, requestData.Length, serverAddress, serverPort);
 
-                    IPEndPoint remoteEndpoint = null;
-                    byte[] responseData = udpClient.Receive(ref remoteEndpoint);
+                IPEndPoint remoteEndpoint = null;
+                byte[] responseData = udpClient.Receive(ref remoteEndpoint);
 
-                    if (responseData.Length > 10 && Encoding.ASCII.GetString(responseData, 0, 4) == "SAMP") {
-                        lastCheckTime = DateTime.UtcNow;
+                if (responseData.Length > 10 && Encoding.ASCII.GetString(responseData, 0, 4) == "SAMP") {
+                    lastCheckTime = DateTime.UtcNow;
 
-                        return lastOnlineResult = Network.State.Online;
-                    }
+                    return lastOnlineResult = Network.State.Online;
                 }
             } catch { }
 

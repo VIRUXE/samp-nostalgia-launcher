@@ -45,19 +45,21 @@ namespace NostalgiaAnticheat {
             public string Url { get; init; }
         }
 
-        public static VersionInfo CurrentVersion { get; } = new(0,1,0, "0");
-        /*public static VersionInfo CurrentVersion {
+        //public static VersionInfo CurrentVersion { get; } = new(0,1,0, "0");
+        public static VersionInfo CurrentVersion {
             get {
                 var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
                 return new VersionInfo(assemblyVersion.Major, assemblyVersion.Minor, assemblyVersion.Build, assemblyVersion.Revision.ToString());
             }
-        }*/
+        }
 
         public static bool ShowReleaseNotes() {
             if (File.Exists("tempReleaseNotes.txt")) {
                 string releaseNotes = File.ReadAllText("tempReleaseNotes.txt");
                 Console.WriteLine($"Updated! Release notes: {releaseNotes}\n");
                 File.Delete("tempReleaseNotes.txt");
+                File.Delete("updater.bat");
+
                 return true;
             }
 
@@ -71,7 +73,7 @@ namespace NostalgiaAnticheat {
                 UpdateInfo? updateInfo = await CheckForUpdates();
 
                 if (updateInfo != null) {
-                    Console.WriteLine($"Updating to version: {updateInfo.Version}");
+                    Console.Write($"Updating to version: {updateInfo.Version}. ");
                     return await SelfUpdate(updateInfo);
                 } else {
                     Console.WriteLine("You are using the latest version.\n");
@@ -84,7 +86,7 @@ namespace NostalgiaAnticheat {
 
         private static async Task<UpdateInfo?> CheckForUpdates() {
             try {
-                string json = await new HttpClient().GetStringAsync($"{Program.API_ADDR}/manifest");
+                string json = await new HttpClient().GetStringAsync($"{Program.API_ADDR}/launcher/manifest");
                 UpdateInfo updateInfo = JsonSerializer.Deserialize<UpdateInfo>(json) ?? throw new InvalidOperationException("Failed to deserialize.");
 
                 if (IsUpdateAvailable(updateInfo.Version)) return updateInfo;
@@ -107,7 +109,44 @@ namespace NostalgiaAnticheat {
         private static async Task<bool> SelfUpdate(UpdateInfo updateInfo) {
             try {
                 // Step 1: Download the new version
-                var newVersionBytes = await new HttpClient().GetByteArrayAsync(updateInfo.Url);
+                var request = new HttpRequestMessage(HttpMethod.Get, updateInfo.Url);
+                var response = await new HttpClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                var contentLength = response.Content.Headers.ContentLength.GetValueOrDefault(0L);
+
+                Console.WriteLine("Downloading update...");
+
+                using var downloadStream = await response.Content.ReadAsStreamAsync();
+                using MemoryStream memoryStream = new();
+
+                var buffer = new byte[8192];
+                var totalBytesRead = 0L;
+                var lastBytesRead = 0L;
+                var stopwatch = new Stopwatch();
+                stopwatch.Start();
+
+                while (true) {
+                    var bytesRead = await downloadStream.ReadAsync(buffer, 0, buffer.Length);
+
+                    if (bytesRead == 0) break;
+
+                    await memoryStream.WriteAsync(buffer, 0, bytesRead);
+
+                    totalBytesRead += bytesRead;
+
+                    if (stopwatch.ElapsedMilliseconds >= 1000) {  // Update speed every second
+                        var speed = (totalBytesRead - lastBytesRead) / 1024.0 / 1024.0;  // in MB
+                        var progress = (double)totalBytesRead / contentLength * 100;
+                        var output = $"Progress: {progress:F2}%   Speed: {speed:F2} MB/s";
+                        var padding = new string(' ', Console.WindowWidth - output.Length - 1);  // -1 for the carriage return
+                        Console.Write($"\r{output}{padding}");
+
+                        lastBytesRead = totalBytesRead;
+                        stopwatch.Restart();
+                    }
+                }
+                Console.WriteLine();
+
+                byte[] newVersionBytes = memoryStream.ToArray();
 
                 // Step 2: Verify hash
                 var hashBytes = SHA1.Create().ComputeHash(newVersionBytes);
@@ -134,12 +173,9 @@ namespace NostalgiaAnticheat {
                    .AppendLine("@echo off")
                    .AppendLine("title Updating Nostalgia Launcher")
                    .AppendLine("echo Starting the update process...")
-                   .AppendLine("timeout /t 3 /nobreak > NUL")
                    .AppendLine("echo Replacing the old version with the new one...")
-                   .AppendLine("timeout /t 3 /nobreak > NUL")
                    .AppendLine($"move /y \"{tempPath}\" \"{Environment.ProcessPath}\"")
                    .AppendLine("echo Update complete!")
-                   .AppendLine("timeout /t 2 /nobreak > NUL")
                    .AppendLine($"start \"\" \"{Environment.ProcessPath}\"")
                    .ToString();
 
