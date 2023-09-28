@@ -1,78 +1,91 @@
 ﻿using NostalgiaAnticheat.Game;
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace NostalgiaAnticheat {
     public static class Settings {
-        private static string _filePath => Path.Combine(Directory.GetCurrentDirectory(), "nostalgia.json");
-        private static SettingsData _data = new();
+        private static string JsonFilePath => Path.Combine(Directory.GetCurrentDirectory(), "nostalgia.json");
+        private static readonly SettingsData FileData = new();
 
-        public static List<string> InstallationPaths {
-            get => _data.InstallationPaths;
-        }
+        public static List<GameInstallation> GameInstallations { get; private set; } = new List<GameInstallation>();
 
-        public static string OldNickname {
-            get => _data.OldNickname;
+        public static string PreviousNickname { get; set; }
+
+        public static string? InitialSAMPGamePath { get; set; }
+
+        public static GameInstallation? SelectedGameInstallation {
+            get => GameInstallations.FirstOrDefault(gi => gi.Location == FileData.SelectedGameInstallationPath);
             set {
-                _data.OldNickname = value;
+                FileData.SelectedGameInstallationPath = value?.Location;
                 Save();
             }
         }
 
-        public static string OldInstallationPath {
-            get => _data.OldInstallationPath;
+        public static GameInstallation? SelectedSAMPInstallation {
+            get => GameInstallations.FirstOrDefault(gi => gi.Location == FileData.SelectedSAMPInstallationPath);
             set {
-                _data.OldInstallationPath = value;
-                Save();
-            }
-        }
-
-        public static string SelectedInstallationPath {
-            get => _data.SelectedInstallationPath;
-            set {
-                _data.SelectedInstallationPath = value;
+                FileData.SelectedSAMPInstallationPath = value?.Location;
                 Save();
             }
         }
 
         static Settings() {
-            Load();
-        }
+            if (File.Exists(JsonFilePath)) {
+                try {
+                    var json = File.ReadAllText(JsonFilePath);
+                    FileData = JsonSerializer.Deserialize<SettingsData>(json) ?? new SettingsData();
 
-        public static void AddInstallationPath(string newPath) {
-            if (!string.IsNullOrWhiteSpace(newPath) && !InstallationPaths.Contains(newPath) && File.Exists(Path.Combine(newPath, "gta_sa.exe"))) {
-                InstallationPaths.Add(newPath);
-                Save();
-            } else
-                throw new ArgumentException("Invalid or duplicate installation path");
-        }
+                    GameInstallations.Clear();
 
-        private static void Load() {
-            if (File.Exists(_filePath)) {
-                var json = File.ReadAllText(_filePath);
-                _data = JsonSerializer.Deserialize<SettingsData>(json) ?? new SettingsData();
-
-                // Only keep the valid paths
-                //_data.InstallationPaths = _data.InstallationPaths.Where(path => GTASA.ValidateInstallationPath(path).Valid).ToList();
+                    foreach (var path in FileData.GameInstallationPaths) {
+                        try {
+                            GameInstallations.Add(new GameInstallation(path));
+                        } catch (Exception ex) {
+                            // Log or handle the exception accordingly
+                            // For now, just ignoring the invalid path
+                        }
+                    }
+                } catch (Exception ex) {
+                    Debug.WriteLine(ex);
+                    FileData = new SettingsData();
+                    Save();
+                }
             } else {
-                _data = new SettingsData();
+                FileData = new SettingsData();
                 Save();
             }
         }
 
         public static void Save() {
-            var json = JsonSerializer.Serialize(_data);
-            File.WriteAllText(_filePath, json);
+            FileData.GameInstallationPaths = GameInstallations.Select(gi => gi.Location).ToList();
+            var json = JsonSerializer.Serialize(FileData);
+            File.WriteAllText(JsonFilePath, json);
         }
 
         private class SettingsData {
-            public List<string> InstallationPaths { get; set; } = new List<string>();
-            public string OldNickname { get; set; }
-            public string OldInstallationPath { get; set; }
-            public string SelectedInstallationPath {  get; set; }
+            public List<string> GameInstallationPaths { get; set; }
+            public string SelectedGameInstallationPath { get; set; } = string.Empty;
+            public string SelectedSAMPInstallationPath { get; set; } = string.Empty;
+
+            public SettingsData() {
+                GameInstallationPaths = new List<string>();
+
+                if (GTASA.InstallPath != null) {
+                    GameInstallationPaths.Add(GTASA.InstallPath);
+                    SelectedGameInstallationPath = GTASA.InstallPath;
+                }
+
+                if (SAMP.GamePath != null) {
+                    if (GTASA.InstallPath != SAMP.GamePath) GameInstallationPaths.Add(SAMP.GamePath);
+
+                    SelectedSAMPInstallationPath = SAMP.GamePath;
+                }
+            }
         }
+
     }
 }

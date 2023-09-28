@@ -14,27 +14,35 @@ using System.Threading.Tasks;
 using static NostalgiaAnticheat.Game.GameValidation;
 
 namespace NostalgiaAnticheat.Game {
-    public class InstallationPath {
-        public readonly string SystemPath;
+    public class GameInstallation {
+        public readonly string Location;
 
-        public bool HasSAMP => (new[] { "samp.exe", "samp.dll" }).All(file => File.Exists(Path.Combine(SystemPath, file)));
+        public GameInstallation(string installationPath) {
+            installationPath = !string.IsNullOrEmpty(Path.GetExtension(installationPath)) ? Path.GetDirectoryName(installationPath) : installationPath;
 
-        public bool HasExecutable => File.Exists(Path.Combine(SystemPath, GTASA.EXECUTABLE_FILENAME));
+            var validationResult = IsExecutableValid(Path.Combine(installationPath, GTASA.EXECUTABLE_FILENAME));
+            if (validationResult.Valid)
+                Location = installationPath;
+            else {
+                if (!string.IsNullOrEmpty(validationResult.Hash))
+                    throw new Exception($"Executable Hash is invalid: {validationResult.Hash}");
+                else
+                    throw new DirectoryNotFoundException();
+            }
+        }
 
-        public string[] Files => Directory.GetFiles(SystemPath, "*", SearchOption.AllDirectories);
+        public bool HasSAMP => (new[] { "samp.exe", "samp.dll" }).All(file => File.Exists(Path.Combine(Location, file)));
 
-        public bool Validate() {
-            if(!HasExecutable) return false;
+        public bool HasExecutable => File.Exists(Path.Combine(Location, GTASA.EXECUTABLE_FILENAME));
 
-            var manifestFileCount = GTASA.CountFilesInManifest();
+        public bool IsExecutableValid => IsExecutableValid(Path.Combine(Location, GTASA.EXECUTABLE_FILENAME)).Valid;
 
-            if (Files.Length < manifestFileCount) throw new MissingRequiredFilesException(Files.Length, manifestFileCount);
+        public string[] Files => Directory.GetFiles(Location, "*", SearchOption.AllDirectories);
 
-            if (GTASA.Manifest == null) throw new InvalidOperationException("Manifest has not been fetched.");
+        public List<(string FilePath, List<InvalidFileReason> Reasons)> MatchAgainstManifest() {
+            Dictionary<string, List<InvalidFileReason>> invalidFilesDict = new();
 
-            var badFiles = new List<(string FilePath, BadFileReason Reason)>();
-
-            static bool ValidateNode(JsonElement node, string currentPath, List<(string FilePath, BadFileReason Reason)> badFilesList) {
+            static void ValidateNode(JsonElement node, string currentPath, Dictionary<string, List<InvalidFileReason>> invalidFiles) {
                 foreach (var property in node.EnumerateObject()) {
                     string newPath = property.Name.Equals("files", StringComparison.OrdinalIgnoreCase) ? currentPath : Path.Combine(currentPath, property.Name);
 
@@ -42,48 +50,141 @@ namespace NostalgiaAnticheat.Game {
                         foreach (var fileNode in property.Value.EnumerateObject()) {
                             string filePath = Path.Combine(newPath, fileNode.Name);
 
-                            if (File.Exists(filePath)) {
+                            try {
+                                if (!File.Exists(filePath)) {
+                                    if (!invalidFiles.ContainsKey(filePath)) invalidFiles[filePath] = new List<InvalidFileReason>();
+                                    invalidFiles[filePath].Add(InvalidFileReason.DoesNotExist);
+                                    continue; // Doesn't exist so we just skip to the next file
+                                }
+
                                 FileInfo fileInfo = new(filePath);
                                 long expectedSize = fileNode.Value.GetProperty("size").GetInt64();
-                                long expectedLastModified = fileNode.Value.GetProperty("last_modified").GetInt64();
                                 long fileLastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc).ToUnixTimeSeconds();
+                                long expectedLastModified = fileNode.Value.GetProperty("last_modified").GetInt64();
 
-                                if (fileInfo.Length != expectedSize) badFilesList.Add((filePath, BadFileReason.FileSizeMismatch));
+                                if (fileInfo.Length != expectedSize) {
+                                    if (!invalidFiles.ContainsKey(filePath)) invalidFiles[filePath] = new List<InvalidFileReason>();
+                                    invalidFiles[filePath].Add(InvalidFileReason.FileSizeMismatch);
+                                }
 
-                                if (fileLastModified != expectedLastModified) badFilesList.Add((filePath, BadFileReason.LastModifiedTimeMismatch));
-                            } else
-                                badFilesList.Add((filePath, BadFileReason.DoesNotExist));
+                                if (fileLastModified != expectedLastModified) {
+                                    if (!invalidFiles.ContainsKey(filePath)) invalidFiles[filePath] = new List<InvalidFileReason>();
+                                    invalidFiles[filePath].Add(InvalidFileReason.LastModifiedTimeMismatch);
+                                }
+                            } catch (UnauthorizedAccessException) {
+                                if (!invalidFiles.ContainsKey(filePath)) invalidFiles[filePath] = new List<InvalidFileReason>();
+                                invalidFiles[filePath].Add(InvalidFileReason.NoAccess);
+                            } catch (Exception) {
+                                if (!invalidFiles.ContainsKey(filePath)) invalidFiles[filePath] = new List<InvalidFileReason>();
+                                invalidFiles[filePath].Add(InvalidFileReason.UnknownError);
+                            }
                         }
                     } else if (property.Value.ValueKind == JsonValueKind.Object)
-                        ValidateNode(property.Value, newPath, badFilesList);
+                        ValidateNode(property.Value, newPath, invalidFiles);
                 }
-
-                return true;
             }
 
-            try {
-                ValidateNode(GTASA.Manifest.RootElement, SystemPath, badFiles);
-                return badFiles.Count == 0;
-            } catch (Exception ex) {
-                Debug.WriteLine(ex.Message);
-                return false;
-            }
+            ValidateNode(Manifest.RootElement, Location, invalidFilesDict);
 
-            return true;
+            return invalidFilesDict.Select(kvp => (FilePath: kvp.Key.Replace(Location + "\\", string.Empty), Reasons: kvp.Value)).ToList();
         }
 
-        public InstallationPath(string path) {
-            path = !string.IsNullOrEmpty(Path.GetExtension(path)) ? Path.GetDirectoryName(path) : path;
+        public ValidationResult Validate(out List<(string FilePath, List<InvalidFileReason> Reasons)> invalidFiles) {
+            invalidFiles = new();
 
-            try {
-                if (GameValidation.IsExecutableValid(Path.Combine(path, GTASA.EXECUTABLE_FILENAME)))
-                    SystemPath = path;
-                else
-                    throw new Exception("Path doesn't exist.");
-            } catch {
-                throw;
-            }
+            if (!HasExecutable) return ValidationResult.MissingExecutable;
+
+            if (!IsExecutableValid) return ValidationResult.InvalidExecutable;
+
+            if (Manifest == null) return ValidationResult.ManifestNotFetched;
+
+            if (Files.Length < CountFilesInManifest()) return ValidationResult.MissingRequiredFiles;
+
+            invalidFiles = MatchAgainstManifest();
+
+            return invalidFiles.Count == 0 ? ValidationResult.Valid : ValidationResult.InvalidFiles;
         }
+
+        public ValidationResult Validate() => Validate(out _);
+
+        public async Task<bool> Repair() {
+            bool success = true;
+
+            var invalidFiles = MatchAgainstManifest();
+
+            // Calculate total size
+            long totalSizeToDownload = 0;
+            long totalDownloaded = 0;
+
+            foreach (var (FilePath, Reason) in invalidFiles) {
+                try {
+                    totalSizeToDownload += GetFileInfoFromManifest(FilePath).Size;
+                } catch (Exception ex) {
+                    Console.WriteLine($"Failed to get file info from manifest for {FilePath}: {ex.Message}");
+                }
+            }
+
+            double totalSizeMB = totalSizeToDownload / (1024.0 * 1024.0); // Convert to MB
+            Console.WriteLine($"Starting Repair... Total size to download: {totalSizeMB:F2} MB");
+
+            int fileIndex = 0;
+            foreach (var (FilePath, Reason) in invalidFiles) {
+                fileIndex++;
+                Console.WriteLine($"\nDownloading {fileIndex} of {invalidFiles.Count}: {FilePath}...");
+
+                string downloadUrl = Program.API_ADDR + $"/game/download/{FilePath}";
+
+                using (HttpResponseMessage response = await new HttpClient().GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+                using (Stream streamToReadFrom = await response.Content.ReadAsStreamAsync()) {
+                    string fileToWriteTo = Path.Combine(Location, FilePath);
+
+                    long totalFileSize = response.Content.Headers.ContentLength ?? 0;
+                    double totalFileSizeMB = totalFileSize / (1024.0 * 1024.0);  // Convert to MB
+                    DateTimeOffset? lastModified = response.Content.Headers.LastModified;  // Get "Last-Modified" header
+
+                    using (Stream streamToWriteTo = File.Open(fileToWriteTo, FileMode.Create)) {
+                        byte[] buffer = new byte[81920];  // 80 KB buffer
+                        int bytesRead;
+                        long totalBytes = 0;
+
+                        DateTime startTime = DateTime.Now;
+
+                        while ((bytesRead = await streamToReadFrom.ReadAsync(buffer, 0, buffer.Length)) != 0) {
+                            await streamToWriteTo.WriteAsync(buffer, 0, bytesRead);
+
+                            totalBytes += bytesRead;
+                            TimeSpan timeTaken = DateTime.Now - startTime;
+
+                            double bytesPerSecond = totalBytes / timeTaken.TotalSeconds;
+
+                            // Convert to megabytes and display on the same line
+                            double mbytesPerSecond = (bytesPerSecond / (1024 * 1024));
+                            double mbytesTotal = (totalBytes / (1024.0 * 1024.0));
+
+                            // Estimate remaining time
+                            double remainingTime = (totalFileSize - totalBytes) / bytesPerSecond;
+                            string remainingTimeStr = remainingTime > 3600 ? $"{remainingTime / 3600:F2} hrs" : remainingTime > 60 ? $"{remainingTime / 60:F2} mins" : $"{remainingTime:F2} sec";
+
+                            // Update totalDownloaded during or after each file download
+                            totalDownloaded += bytesRead; // totalFileSize from your current code
+                            double totalDownloadedMB = totalDownloaded / (1024.0 * 1024.0); // Convert to MB
+
+                            string output = $"\r{mbytesTotal:F2} MB of {totalFileSizeMB:F2} MB at {mbytesPerSecond:F2} MB/sec. Estimated time remaining: {remainingTimeStr}. Total downloaded: {totalDownloadedMB:F2}/{totalSizeMB:F2} MB";
+
+                            Console.Write(output.PadRight(100));
+                        }
+
+                        // Set "Last-Modified" time after download
+                        if (lastModified.HasValue) File.SetLastWriteTime(fileToWriteTo, lastModified.Value.DateTime); 
+                    }
+                }
+            }
+
+            Console.WriteLine("\nRepair Complete!");
+            return success;
+        }
+
+        public override string ToString() => Location;
     }
 
     public static class GTASA {
@@ -93,8 +194,6 @@ namespace NostalgiaAnticheat.Game {
         public static bool Monitoring;
         public static event Action GameStarted;
         public static event Action GameExited;
-
-        public static JsonDocument Manifest;
 
         public static string CurrentInstallationPath { get; private set; }
 
@@ -116,7 +215,8 @@ namespace NostalgiaAnticheat.Game {
         }
 
         public static string InstallPath => (Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Rockstar Games\GTA San Andreas\Installation", "ExePath", null) as string)?.Replace("\"", "");
-        
+        public static bool IsInstalled => InstallPath != null;
+
         public static bool Launch() {
             if (IsRunning) {
                 Focus();
@@ -173,20 +273,20 @@ namespace NostalgiaAnticheat.Game {
         /// <summary>
         /// Starts monitoring for the GTA SA processes. Kills any non-legitimate instances of the game and raises events when the game starts or exits.
         /// </summary>
-        public static async void MonitorProcesses() {
+        public static async void MonitorGameProcesses() {
             if(Monitoring) return;
 
             Monitoring = true;
 
             await Task.Run(() => {
                 while (true) {
-                    if (ExecutablePath == null) continue;
+                    if (Settings.SelectedGameInstallation == null) continue;
 
                     // Get a list of all currently running GTA processes
                     // Loop through each GTA process found
                     foreach (var process in GetAllGTAProcesses()) {
                         // If the process path doesn't match our installation path, it's not a legitimate process and we should kill it
-                        if (process.MainModule.FileName != ExecutablePath) { 
+                        if (process.MainModule.FileName != Settings.SelectedGameInstallation.Location) { 
                             process.Kill();
                             continue;
                         }
@@ -211,27 +311,6 @@ namespace NostalgiaAnticheat.Game {
                     Thread.Sleep(1000);
                 }
             });
-        }
-
-        public static int CountFilesInManifest() {
-            static int CountFilesInNode(JsonElement node) {
-                int fileCount = 0;
-
-                foreach (var entry in node.EnumerateObject()) {
-                    if (entry.Name == "files" && entry.Value.ValueKind == JsonValueKind.Object)
-                        fileCount += entry.Value.EnumerateObject().Count();
-                    else if (entry.Value.ValueKind == JsonValueKind.Object)
-                        fileCount += CountFilesInNode(entry.Value);
-                }
-
-                return fileCount;
-            }
-
-            return CountFilesInNode(Manifest.RootElement);
-        }
-
-        public static bool ValidateInstallationAgainstManifest(string installationPath, out List<(string FilePath, string Issue)> badFiles) {
-            
         }
 
         public static async Task<bool> DownloadGameArchive() {

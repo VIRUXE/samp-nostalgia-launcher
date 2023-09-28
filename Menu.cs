@@ -1,8 +1,8 @@
 ﻿using NostalgiaAnticheat.Game;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using System.IO;
 using System.Threading.Tasks;
 
 namespace NostalgiaAnticheat {
@@ -11,7 +11,7 @@ namespace NostalgiaAnticheat {
 
         private static readonly List<MenuOption> menuOptions = new() {
             new MenuOption(("Logar", "Login"),
-                () => !Player.LoggedIn && GTASA.IsCurrentInstallationValid && Gameserver.IsOnline,
+                () => !Player.LoggedIn && Settings.SelectedSAMPInstallation.HasSAMP && Settings.SelectedGameInstallation.Validate() == GameValidation.ValidationResult.Valid && Gameserver.IsOnline,
                 async () => {
                     Program.DisplayMessage(
                         "Para entrar, você precisará fornecer seu Apelido e Senha do Servidor.\nDigite seu apelido (ou deixe em branco para usar o que tem no SA-MP):",
@@ -61,7 +61,7 @@ namespace NostalgiaAnticheat {
                 }
             ),
             new MenuOption(("Jogar", "Play"),
-                () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsCurrentInstallationValid,
+                () => Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && Settings.SelectedGameInstallation.HasExecutable,
                 () => {
                     /*var verificationResult = GTASA.Verify();
 
@@ -77,16 +77,13 @@ namespace NostalgiaAnticheat {
                     return Task.CompletedTask;
                 }
             ),
-            new MenuOption(("Mudar Pasta do Jogo", "Change Game InstallationPath"),
+            new MenuOption(("Mudar Pasta do Jogo", "Change Game Installation"),
                 () => !GTASA.IsRunning,
-                async () => await SAMP.ChangeGamePath()
+                async () => await Program.ChangeInstallationPaths()
             ),
             new MenuOption(("Reparar Jogo", "Repair Game"),
-                () => !GTASA.IsRunning && !GTASA.IsCurrentInstallationValid,
-                () => {
-                    Console.WriteLine("This feature is not yet implemented.");
-                    return Task.CompletedTask;
-                }
+                () => !GTASA.IsRunning && Settings.SelectedGameInstallation.Validate() != GameValidation.ValidationResult.Valid,
+                async () => await Settings.SelectedGameInstallation.Repair()
             ),
             new MenuOption(("Focar no Jogo", "Focus on GTASA"),
                 () => GTASA.IsRunning && !GTASA.IsFocused,
@@ -164,8 +161,8 @@ namespace NostalgiaAnticheat {
             DisplayOptions();
 
             while (true) {
-                bool condition = Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && GTASA.IsCurrentInstallationValid;
-                Debug.WriteLine($"Player Logged In: {Player.LoggedIn}, GTASA Running: {!GTASA.IsRunning}, Gameserver Online: {Gameserver.IsOnline}, GTASA Installation Valid: {GTASA.IsCurrentInstallationValid}, Condition Result: {condition}");
+                bool condition = Player.LoggedIn && !GTASA.IsRunning && Gameserver.IsOnline && Settings.SelectedGameInstallation.HasExecutable;
+                Debug.WriteLine($"Player Logged In: {Player.LoggedIn}, GTASA Running: {!GTASA.IsRunning}, Gameserver Online: {Gameserver.IsOnline}, GTASA Installation Valid: {Settings.SelectedGameInstallation.HasExecutable}, Condition Result: {condition}");
 
                 ConsoleKeyInfo key = Console.ReadKey(true);
 
